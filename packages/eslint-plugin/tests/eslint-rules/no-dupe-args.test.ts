@@ -1,21 +1,17 @@
-import rule from 'eslint/lib/rules/no-dupe-args';
-import { RuleTester } from '../RuleTester';
+import { RuleTester } from '@typescript-eslint/rule-tester';
 
-const ruleTester = new RuleTester({
-  parserOptions: {
-    ecmaVersion: 6,
-    sourceType: 'module',
-    ecmaFeatures: {},
-  },
-  parser: '@typescript-eslint/parser',
-});
+import { getESLintCoreRule } from '../../src/util/getESLintCoreRule';
+
+const rule = getESLintCoreRule('no-dupe-args');
+
+const ruleTester = new RuleTester();
 
 ruleTester.run('no-dupe-args', rule, {
   valid: [
     // https://github.com/eslint/typescript-eslint-parser/issues/535
     `
 function foo({ bar }: { bar: string }) {
-    console.log(bar);
+  console.log(bar);
 }
     `,
   ],

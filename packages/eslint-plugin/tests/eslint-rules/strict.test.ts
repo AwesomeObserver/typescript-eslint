@@ -1,13 +1,10 @@
-import rule from 'eslint/lib/rules/strict';
-import { RuleTester } from '../RuleTester';
+import { RuleTester } from '@typescript-eslint/rule-tester';
 
-const ruleTester = new RuleTester({
-  parserOptions: {
-    ecmaVersion: 6,
-    sourceType: 'module',
-  },
-  parser: '@typescript-eslint/parser',
-});
+import { getESLintCoreRule } from '../../src/util/getESLintCoreRule';
+
+const rule = getESLintCoreRule('strict');
+
+const ruleTester = new RuleTester();
 
 ruleTester.run('strict', rule, {
   valid: [
@@ -16,9 +13,9 @@ ruleTester.run('strict', rule, {
 window.whatevs = {
   myFunc() {
     console.log('yep');
-  }
+  },
 };
-`,
+    `,
   ],
   invalid: [
     {
@@ -27,19 +24,23 @@ window.whatevs = {
 window.whatevs = {
   myFunc() {
     console.log('yep');
-  }
+  },
 };
-`,
-      parserOptions: {
-        sourceType: 'script',
-      },
+      `,
       errors: [
         {
-          message: "Use the function form of 'use strict'.",
-          line: 3,
           column: 9,
-        } as any, // the base rule doesn't use messageId
+          line: 3,
+          message: "Use the function form of 'use strict'.",
+          // the base rule doesn't use messageId
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
       ],
+      languageOptions: {
+        parserOptions: {
+          sourceType: 'script',
+        },
+      },
     },
   ],
 });

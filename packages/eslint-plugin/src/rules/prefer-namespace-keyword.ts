@@ -1,19 +1,15 @@
-import {
-  AST_NODE_TYPES,
-  AST_TOKEN_TYPES,
-} from '@typescript-eslint/typescript-estree';
-import * as util from '../util';
+import { AST_NODE_TYPES, AST_TOKEN_TYPES } from '@typescript-eslint/utils';
 
-export default util.createRule({
+import { createRule } from '../util';
+
+export default createRule({
   name: 'prefer-namespace-keyword',
   meta: {
     type: 'suggestion',
     docs: {
       description:
-        'Require the use of the `namespace` keyword instead of the `module` keyword to declare custom TypeScript modules.',
-      tslintRuleName: 'no-internal-module',
-      category: 'Best Practices',
-      recommended: 'error',
+        'Require using `namespace` keyword over `module` keyword to declare custom TypeScript modules',
+      recommended: 'recommended',
     },
     fixable: 'code',
     messages: {
@@ -22,22 +18,20 @@ export default util.createRule({
     },
     schema: [],
   },
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- For compatibility with ESLint 8, see #12842
   defaultOptions: [],
   create(context) {
-    const sourceCode = context.getSourceCode();
-
     return {
-      TSModuleDeclaration(node) {
+      TSModuleDeclaration(node): void {
         // Do nothing if the name is a string.
-        if (!node.id || node.id.type === AST_NODE_TYPES.Literal) {
+        if (node.id.type === AST_NODE_TYPES.Literal) {
           return;
         }
         // Get tokens of the declaration header.
-        const moduleType = sourceCode.getTokenBefore(node.id);
+        const moduleType = context.sourceCode.getTokenBefore(node.id);
 
         if (
-          moduleType &&
-          moduleType.type === AST_TOKEN_TYPES.Identifier &&
+          moduleType?.type === AST_TOKEN_TYPES.Identifier &&
           moduleType.value === 'module'
         ) {
           context.report({

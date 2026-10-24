@@ -1,16 +1,18 @@
-import { TSESTree } from '@typescript-eslint/typescript-estree';
-import ts from 'typescript';
-import * as tsutils from 'tsutils';
-import * as util from '../util';
+import type { TSESTree } from '@typescript-eslint/utils';
 
-export default util.createRule({
+import { AST_NODE_TYPES } from '@typescript-eslint/utils';
+import * as tsutils from 'ts-api-utils';
+import * as ts from 'typescript';
+
+import { createRule, getParserServices } from '../util';
+
+export default createRule({
   name: 'no-unnecessary-qualifier',
   meta: {
+    type: 'suggestion',
     docs: {
-      category: 'Best Practices',
-      description: 'Warns when a namespace qualifier is unnecessary.',
-      recommended: false,
-      tslintName: 'no-unnecessary-qualifier',
+      description: 'Disallow unnecessary namespace qualifiers',
+      requiresTypeChecking: true,
     },
     fixable: 'code',
     messages: {
@@ -18,17 +20,15 @@ export default util.createRule({
         "Qualifier is unnecessary since '{{ name }}' is in scope.",
     },
     schema: [],
-    type: 'suggestion',
   },
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- For compatibility with ESLint 8, see #12842
   defaultOptions: [],
   create(context) {
     const namespacesInScope: ts.Node[] = [];
     let currentFailedNamespaceExpression: TSESTree.Node | null = null;
-    const parserServices = util.getParserServices(context);
-    const esTreeNodeToTSNodeMap = parserServices.esTreeNodeToTSNodeMap;
-    const program = parserServices.program;
-    const checker = program.getTypeChecker();
-    const sourceCode = context.getSourceCode();
+    const services = getParserServices(context);
+    const esTreeNodeToTSNodeMap = services.esTreeNodeToTSNodeMap;
+    const checker = services.program.getTypeChecker();
 
     function tryGetAliasedSymbol(
       symbol: ts.Symbol,
@@ -40,7 +40,7 @@ export default util.createRule({
     }
 
     function symbolIsNamespaceInScope(symbol: ts.Symbol): boolean {
-      const symbolDeclarations = symbol.getDeclarations() || [];
+      const symbolDeclarations = symbol.getDeclarations() ?? [];
 
       if (
         symbolDeclarations.some(decl =>
@@ -52,7 +52,7 @@ export default util.createRule({
 
       const alias = tryGetAliasedSymbol(symbol, checker);
 
-      return alias !== null && symbolIsNamespaceInScope(alias);
+      return alias != null && symbolIsNamespaceInScope(alias);
     }
 
     function getSymbolInScope(
@@ -60,7 +60,6 @@ export default util.createRule({
       flags: ts.SymbolFlags,
       name: string,
     ): ts.Symbol | undefined {
-      // TODO:PERF `getSymbolsInScope` gets a long list. Is there a better way?
       const scope = checker.getSymbolsInScope(node, flags);
 
       return scope.find(scopeSymbol => scopeSymbol.name === name);
@@ -71,43 +70,38 @@ export default util.createRule({
     }
 
     function qualifierIsUnnecessary(
-      qualifier: TSESTree.Node,
+      qualifier: TSESTree.EntityName | TSESTree.MemberExpression,
       name: TSESTree.Identifier,
     ): boolean {
-      const tsQualifier = esTreeNodeToTSNodeMap.get(qualifier);
-      const tsName = esTreeNodeToTSNodeMap.get(name);
-
-      const namespaceSymbol = checker.getSymbolAtLocation(tsQualifier);
+      const namespaceSymbol = services.getSymbolAtLocation(qualifier);
 
       if (
-        typeof namespaceSymbol === 'undefined' ||
+        namespaceSymbol == null ||
         !symbolIsNamespaceInScope(namespaceSymbol)
       ) {
         return false;
       }
 
-      const accessedSymbol = checker.getSymbolAtLocation(tsName);
+      const accessedSymbol = services.getSymbolAtLocation(name);
 
-      if (typeof accessedSymbol === 'undefined') {
+      if (accessedSymbol == null) {
         return false;
       }
 
       // If the symbol in scope is different, the qualifier is necessary.
+      const tsQualifier = esTreeNodeToTSNodeMap.get(qualifier);
       const fromScope = getSymbolInScope(
         tsQualifier,
         accessedSymbol.flags,
-        sourceCode.getText(name),
+        context.sourceCode.getText(name),
       );
 
-      return (
-        typeof fromScope === 'undefined' ||
-        symbolsAreEqual(accessedSymbol, fromScope)
-      );
+      return !!fromScope && symbolsAreEqual(accessedSymbol, fromScope);
     }
 
     function visitNamespaceAccess(
       node: TSESTree.Node,
-      qualifier: TSESTree.Node,
+      qualifier: TSESTree.EntityName | TSESTree.MemberExpression,
       name: TSESTree.Identifier,
     ): void {
       // Only look for nested qualifier errors if we didn't already fail on the outer qualifier.
@@ -120,7 +114,7 @@ export default util.createRule({
           node: qualifier,
           messageId: 'unnecessaryQualifier',
           data: {
-            name: sourceCode.getText(name),
+            name: context.sourceCode.getText(name),
           },
           fix(fixer) {
             return fixer.removeRange([qualifier.range[0], name.range[0]]);
@@ -129,11 +123,16 @@ export default util.createRule({
       }
     }
 
-    function enterDeclaration(node: TSESTree.Node): void {
+    function enterDeclaration(
+      node:
+        | TSESTree.ExportNamedDeclaration
+        | TSESTree.TSEnumDeclaration
+        | TSESTree.TSModuleDeclaration,
+    ): void {
       namespacesInScope.push(esTreeNodeToTSNodeMap.get(node));
     }
 
-    function exitDeclaration() {
+    function exitDeclaration(): void {
       namespacesInScope.pop();
     }
 
@@ -146,30 +145,30 @@ export default util.createRule({
     function isPropertyAccessExpression(
       node: TSESTree.Node,
     ): node is TSESTree.MemberExpression {
-      return node.type === 'MemberExpression' && !node.computed;
+      return node.type === AST_NODE_TYPES.MemberExpression && !node.computed;
     }
 
-    function isEntityNameExpression(node: TSESTree.Node): boolean {
+    function isEntityNameExpression(
+      node: TSESTree.Node,
+    ): node is TSESTree.Identifier | TSESTree.MemberExpression {
       return (
-        node.type === 'Identifier' ||
+        node.type === AST_NODE_TYPES.Identifier ||
         (isPropertyAccessExpression(node) &&
           isEntityNameExpression(node.object))
       );
     }
 
     return {
-      TSModuleDeclaration: enterDeclaration,
-      TSEnumDeclaration: enterDeclaration,
-      'ExportNamedDeclaration[declaration.type="TSModuleDeclaration"]': enterDeclaration,
-      'ExportNamedDeclaration[declaration.type="TSEnumDeclaration"]': enterDeclaration,
-      'TSModuleDeclaration:exit': exitDeclaration,
-      'TSEnumDeclaration:exit': exitDeclaration,
-      'ExportNamedDeclaration[declaration.type="TSModuleDeclaration"]:exit': exitDeclaration,
-      'ExportNamedDeclaration[declaration.type="TSEnumDeclaration"]:exit': exitDeclaration,
-      TSQualifiedName(node: TSESTree.TSQualifiedName): void {
-        visitNamespaceAccess(node, node.left, node.right);
-      },
-      'MemberExpression[computed=false]': function(
+      'ExportNamedDeclaration[declaration.type="TSEnumDeclaration"]':
+        enterDeclaration,
+      'ExportNamedDeclaration[declaration.type="TSEnumDeclaration"]:exit':
+        exitDeclaration,
+      'ExportNamedDeclaration[declaration.type="TSModuleDeclaration"]':
+        enterDeclaration,
+      'ExportNamedDeclaration[declaration.type="TSModuleDeclaration"]:exit':
+        exitDeclaration,
+      'MemberExpression:exit': resetCurrentNamespaceExpression,
+      'MemberExpression[computed=false]'(
         node: TSESTree.MemberExpression,
       ): void {
         const property = node.property as TSESTree.Identifier;
@@ -177,8 +176,18 @@ export default util.createRule({
           visitNamespaceAccess(node, node.object, property);
         }
       },
+      TSEnumDeclaration: enterDeclaration,
+      'TSEnumDeclaration:exit': exitDeclaration,
+      'TSModuleDeclaration:exit': exitDeclaration,
+      'TSModuleDeclaration > TSModuleBlock'(
+        node: TSESTree.TSModuleBlock,
+      ): void {
+        enterDeclaration(node.parent);
+      },
+      TSQualifiedName(node: TSESTree.TSQualifiedName): void {
+        visitNamespaceAccess(node, node.left, node.right);
+      },
       'TSQualifiedName:exit': resetCurrentNamespaceExpression,
-      'MemberExpression:exit': resetCurrentNamespaceExpression,
     };
   },
 });

@@ -1,0 +1,29 @@
+name: '🏗 Improve Repository Maintenance'
+description: Improve the development experience for the typescript-eslint monorepo
+title: 'Repo: <short description of the issue>'
+labels:
+  - 'repo maintenance'
+  - triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue form is specifically for work done in this repository. Only use it if you are suggesting a change to repository tooling. Don't use it for work in any other repository.
+  - type: checkboxes
+    id: ai-policy
+    attributes:
+      label: AI Assistance
+      options:
+        - label: If I used AI assistance to prepare this issue, I have reviewed and followed the [AI Contribution Policy](https://typescript-eslint.io/contributing/ai-policy/).
+          required: true
+  - type: textarea
+    attributes:
+      label: Suggestion
+      description: Tell us exactly what you'd like to see happen. Please be as specific as possible here.
+      placeholder: I want a new CI action that does X when Y ...
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional Info
+      description: Any additional info you'd like to provide.

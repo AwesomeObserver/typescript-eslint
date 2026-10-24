@@ -1,64 +1,88 @@
-import rule from '../../src/rules/prefer-namespace-keyword';
-import { RuleTester } from '../RuleTester';
+import { RuleTester } from '@typescript-eslint/rule-tester';
 
-const ruleTester = new RuleTester({
-  parser: '@typescript-eslint/parser',
-});
+import rule from '../../src/rules/prefer-namespace-keyword';
+
+const ruleTester = new RuleTester();
 
 ruleTester.run('prefer-namespace-keyword', rule, {
+  assertionOptions: {
+    requireData: true,
+  },
   valid: [
-    "declare module 'foo'",
-    "declare module 'foo' { }",
-    'namespace foo { }',
-    'declare namespace foo { }',
-    'declare global { }',
+    "declare module 'foo';",
+    "declare module 'foo' {}",
+    'namespace foo {}',
+    'declare namespace foo {}',
+    'declare global {}',
   ],
   invalid: [
     {
-      code: 'module foo { }',
-      output: 'namespace foo { }',
+      code: 'module foo {}',
       errors: [
         {
-          messageId: 'useNamespace',
-          line: 1,
           column: 1,
+          endColumn: 14,
+          endLine: 1,
+          line: 1,
+          messageId: 'useNamespace',
         },
       ],
+      output: 'namespace foo {}',
     },
     {
-      code: 'declare module foo { }',
-      output: 'declare namespace foo { }',
+      code: 'declare module foo {}',
       errors: [
         {
-          messageId: 'useNamespace',
-          line: 1,
           column: 1,
+          endColumn: 22,
+          endLine: 1,
+          line: 1,
+          messageId: 'useNamespace',
         },
       ],
+      output: 'declare namespace foo {}',
     },
     {
       code: `
 declare module foo {
-    declare module bar { }
+  declare namespace bar {}
 }
-            `,
-      output: `
-declare namespace foo {
-    declare namespace bar { }
-}
-            `,
+      `,
       errors: [
         {
-          messageId: 'useNamespace',
-          line: 2,
           column: 1,
-        },
-        {
+          endColumn: 2,
+          endLine: 4,
+          line: 2,
           messageId: 'useNamespace',
-          line: 3,
-          column: 5,
         },
       ],
+      output: `
+declare namespace foo {
+  declare namespace bar {}
+}
+      `,
+    },
+    {
+      code: `
+declare namespace foo {
+  declare module bar {}
+}
+      `,
+      errors: [
+        {
+          column: 3,
+          endColumn: 24,
+          endLine: 3,
+          line: 3,
+          messageId: 'useNamespace',
+        },
+      ],
+      output: `
+declare namespace foo {
+  declare namespace bar {}
+}
+      `,
     },
   ],
 });

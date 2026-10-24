@@ -1,26 +1,22 @@
-
 {
+  // This matches the value configured on the autoformatter
+  "editor.rulers": [80],
+
   // An array of language ids which should be validated by ESLint
   "eslint.validate": [
       "javascript",
       "javascriptreact",
-      {
-          "language": "typescript",
-          "autoFix": true
-      },
-      {
-          "language": "typescriptreact",
-          "autoFix": true
-      }
+      "typescript",
+      "typescriptreact"
   ],
 
   // When enabled, will trim trailing whitespace when saving a file.
   "files.trimTrailingWhitespace": true,
 
   // typescript auto-format settings
-  "typescript.tsdk": "node_modules/typescript/lib",
-  "javascript.preferences.importModuleSpecifier": "auto",
-  "typescript.preferences.importModuleSpecifier": "auto",
-  "javascript.preferences.quoteStyle": "single",
-  "typescript.preferences.quoteStyle": "single"
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
+  "js/ts.preferences.importModuleSpecifier": "project-relative",
+  "js/ts.preferences.quoteStyle": "single",
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "nxConsole.generateAiAgentRules": true,
 }

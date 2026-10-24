@@ -1,3 +1,6 @@
+codecov:
+  require_ci_to_pass: no
+
 coverage:
   status:
     patch:
@@ -7,7 +10,15 @@ coverage:
       default:
         target: auto
         threshold: 2%
+
 comment:
   layout: diff, flags, files
   require_changes: true
-  
+
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    # Don't keep carrying the old whole-repo flag from before per-package uploads
+    - name: unittest
+      carryforward: false

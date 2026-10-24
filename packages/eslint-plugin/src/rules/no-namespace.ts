@@ -1,44 +1,49 @@
-import { AST_NODE_TYPES, TSESTree } from '@typescript-eslint/typescript-estree';
-import * as util from '../util';
+import type { TSESTree } from '@typescript-eslint/utils';
 
-type Options = [
+import { AST_NODE_TYPES } from '@typescript-eslint/utils';
+
+import { createRule, isDefinitionFile } from '../util';
+
+export type Options = [
   {
     allowDeclarations?: boolean;
     allowDefinitionFiles?: boolean;
-  }
+  },
 ];
-type MessageIds = 'moduleSyntaxIsPreferred';
+export type MessageIds = 'moduleSyntaxIsPreferred';
 
-export default util.createRule<Options, MessageIds>({
+export default createRule<Options, MessageIds>({
   name: 'no-namespace',
   meta: {
     type: 'suggestion',
     docs: {
-      description:
-        'Disallow the use of custom TypeScript modules and namespaces',
-      tslintRuleName: 'no-namespace',
-      category: 'Best Practices',
-      recommended: 'error',
+      description: 'Disallow TypeScript namespaces',
+      recommended: 'recommended',
     },
     messages: {
       moduleSyntaxIsPreferred:
-        'ES2015 module syntax is preferred over custom TypeScript modules and namespaces.',
+        'ES2015 module syntax is preferred over namespaces.',
     },
     schema: [
       {
         type: 'object',
+        additionalProperties: false,
         properties: {
           allowDeclarations: {
             type: 'boolean',
+            description:
+              'Whether to allow `declare` with custom TypeScript namespaces.',
           },
           allowDefinitionFiles: {
             type: 'boolean',
+            description:
+              'Whether to allow `declare` with custom TypeScript namespaces inside definition files.',
           },
         },
-        additionalProperties: false,
       },
     ],
   },
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- For compatibility with ESLint 8, see #12842
   defaultOptions: [
     {
       allowDeclarations: false,
@@ -46,17 +51,22 @@ export default util.createRule<Options, MessageIds>({
     },
   ],
   create(context, [{ allowDeclarations, allowDefinitionFiles }]) {
-    const filename = context.getFilename();
+    function isDeclaration(node: TSESTree.Node): boolean {
+      if (node.type === AST_NODE_TYPES.TSModuleDeclaration && node.declare) {
+        return true;
+      }
+
+      return node.parent != null && isDeclaration(node.parent);
+    }
 
     return {
-      "TSModuleDeclaration[global!=true][id.type='Identifier']"(
+      "TSModuleDeclaration[global!=true][id.type!='Literal']"(
         node: TSESTree.TSModuleDeclaration,
-      ) {
+      ): void {
         if (
-          (node.parent &&
-            node.parent.type === AST_NODE_TYPES.TSModuleDeclaration) ||
-          (allowDefinitionFiles && util.isDefinitionFile(filename)) ||
-          (allowDeclarations && node.declare === true)
+          node.parent.type === AST_NODE_TYPES.TSModuleDeclaration ||
+          (allowDefinitionFiles && isDefinitionFile(context.filename)) ||
+          (allowDeclarations && isDeclaration(node))
         ) {
           return;
         }

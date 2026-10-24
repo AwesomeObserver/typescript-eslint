@@ -1,45 +1,34 @@
-import { AST_NODE_TYPES } from '@typescript-eslint/typescript-estree';
+import { RuleTester } from '@typescript-eslint/rule-tester';
+
 import rule from '../../src/rules/no-extraneous-class';
-import { RuleTester } from '../RuleTester';
 
-const empty = {
-  messageId: 'empty' as 'empty',
-};
-const onlyStatic = {
-  messageId: 'onlyStatic' as 'onlyStatic',
-};
-const onlyConstructor = {
-  messageId: 'onlyConstructor' as 'onlyConstructor',
-};
-
-const ruleTester = new RuleTester({
-  parser: '@typescript-eslint/parser',
-});
+const ruleTester = new RuleTester();
 
 ruleTester.run('no-extraneous-class', rule, {
+  assertionOptions: {
+    requireData: true,
+  },
   valid: [
     `
 class Foo {
-    public prop = 1;
-    constructor() {}
+  public prop = 1;
+  constructor() {}
 }
-`,
+    `,
     `
 export class CClass extends BaseClass {
-    public static helper(): void {}
-    private static privateHelper(): boolean {
-        return true;
-    }
-    constructor() {}
+  public static helper(): void {}
+  private static privateHelper(): boolean {
+    return true;
+  }
+  constructor() {}
 }
-`,
+    `,
     `
 class Foo {
-   constructor(
-     public bar: string
-   ) {}
+  constructor(public bar: string) {}
 }
-`,
+    `,
     {
       code: 'class Foo {}',
       options: [{ allowEmpty: true }],
@@ -47,81 +36,355 @@ class Foo {
     {
       code: `
 class Foo {
-    constructor() {}
+  constructor() {}
 }
-`,
+      `,
       options: [{ allowConstructorOnly: true }],
     },
     {
       code: `
 export class Bar {
-    public static helper(): void {}
-    private static privateHelper(): boolean {
-        return true;
-    }
+  public static helper(): void {}
+  private static privateHelper(): boolean {
+    return true;
+  }
 }
-`,
+      `,
       options: [{ allowStaticOnly: true }],
     },
     // https://github.com/typescript-eslint/typescript-eslint/issues/170
-    'export default class { hello() { return "I am foo!"; } }',
+    `
+export default class {
+  hello() {
+    return 'I am foo!';
+  }
+}
+    `,
+    {
+      code: `
+@FooDecorator
+class Foo {}
+      `,
+      options: [{ allowWithDecorator: true }],
+    },
+    {
+      code: `
+@FooDecorator
+class Foo {
+  constructor(foo: Foo) {
+    foo.subscribe(a => {
+      console.log(a);
+    });
+  }
+}
+      `,
+      options: [{ allowWithDecorator: true }],
+    },
+    `
+abstract class Foo {
+  abstract property: string;
+}
+    `,
+    `
+abstract class Foo {
+  abstract method(): string;
+}
+    `,
+    {
+      code: `
+class Foo {
+  accessor prop: string;
+}
+      `,
+      // `accessor` keyword requires TS 4.9
+      dependencyConstraints: { typescript: '4.9' },
+    },
+    {
+      code: `
+class Foo {
+  accessor prop = 'bar';
+  static bar() {
+    return false;
+  }
+}
+      `,
+      // `accessor` keyword requires TS 4.9
+      dependencyConstraints: { typescript: '4.9' },
+    },
+    `
+class Foo {
+  [key: string]: string;
+}
+    `,
+    {
+      code: `
+abstract class Foo {
+  accessor prop: string;
+}
+      `,
+      // `accessor` keyword requires TS 4.9
+      dependencyConstraints: { typescript: '4.9' },
+    },
+    {
+      code: `
+abstract class Foo {
+  abstract accessor prop: string;
+}
+      `,
+      // `accessor` keyword requires TS 4.9
+      dependencyConstraints: { typescript: '4.9' },
+    },
   ],
 
   invalid: [
     {
       code: 'class Foo {}',
-      errors: [empty],
+      errors: [
+        {
+          column: 7,
+          endColumn: 10,
+          endLine: 1,
+          line: 1,
+          messageId: 'empty',
+        },
+      ],
     },
     {
       code: `
 class Foo {
-    public prop = 1;
-    constructor() {
-        class Bar {
-            static PROP = 2;
-        }
+  public prop = 1;
+  constructor() {
+    class Bar {
+      static PROP = 2;
     }
+  }
 }
+      `,
+      errors: [
+        {
+          column: 11,
+          endColumn: 14,
+          endLine: 5,
+          line: 5,
+          messageId: 'onlyStatic',
+        },
+      ],
+    },
+    {
+      code: `
 export class Bar {
-    public static helper(): void {}
-    private static privateHelper(): boolean {
-        return true;
-    }
+  public static helper(): void {}
+  private static privateHelper(): boolean {
+    return true;
+  }
 }
-`,
-      errors: [onlyStatic, onlyStatic],
+      `,
+      errors: [
+        {
+          column: 14,
+          endColumn: 17,
+          endLine: 2,
+          line: 2,
+          messageId: 'onlyStatic',
+        },
+      ],
     },
     {
       code: `
 class Foo {
-    constructor() {}
+  constructor() {}
 }
-`,
-      errors: [onlyConstructor],
+      `,
+      errors: [
+        {
+          column: 7,
+          endColumn: 10,
+          endLine: 2,
+          line: 2,
+          messageId: 'onlyConstructor',
+        },
+      ],
     },
     {
       code: `
 export class AClass {
-    public static helper(): void {}
-    private static privateHelper(): boolean {
-        return true;
+  public static helper(): void {}
+  private static privateHelper(): boolean {
+    return true;
+  }
+  constructor() {
+    class nestedClass {
+      public prop = 1;
     }
-    constructor() {
-        class nestedClass {
-        }
-    }
+  }
 }
-
-`,
-      errors: [onlyStatic, empty],
+      `,
+      errors: [
+        {
+          column: 14,
+          endColumn: 20,
+          endLine: 2,
+          line: 2,
+          messageId: 'onlyStatic',
+        },
+      ],
+    },
+    {
+      code: `
+export class AClass {
+  public helper(): void {}
+  private privateHelper(): boolean {
+    return true;
+  }
+  constructor() {
+    class nestedClass {}
+  }
+}
+      `,
+      errors: [
+        {
+          column: 11,
+          endColumn: 22,
+          endLine: 8,
+          line: 8,
+          messageId: 'empty',
+        },
+      ],
     },
     {
       // https://github.com/typescript-eslint/typescript-eslint/issues/170
-      code: 'export default class { static hello() {} }',
+      code: `
+export default class {
+  static hello() {}
+}
+      `,
       errors: [
         {
-          ...onlyStatic,
-          type: AST_NODE_TYPES.ClassDeclaration,
+          column: 16,
+          endColumn: 2,
+          endLine: 4,
+          line: 2,
+          messageId: 'onlyStatic',
+        },
+      ],
+    },
+    {
+      code: `
+@FooDecorator
+class Foo {}
+      `,
+      errors: [
+        {
+          column: 7,
+          endColumn: 10,
+          endLine: 3,
+          line: 3,
+          messageId: 'empty',
+        },
+      ],
+      options: [{ allowWithDecorator: false }],
+    },
+    {
+      code: `
+@FooDecorator
+class Foo {
+  constructor(foo: Foo) {
+    foo.subscribe(a => {
+      console.log(a);
+    });
+  }
+}
+      `,
+      errors: [
+        {
+          column: 7,
+          endColumn: 10,
+          endLine: 3,
+          line: 3,
+          messageId: 'onlyConstructor',
+        },
+      ],
+      options: [{ allowWithDecorator: false }],
+    },
+    {
+      code: `
+abstract class Foo {}
+      `,
+      errors: [
+        {
+          column: 16,
+          endColumn: 19,
+          endLine: 2,
+          line: 2,
+          messageId: 'empty',
+        },
+      ],
+    },
+    {
+      code: `
+abstract class Foo {
+  static property: string;
+}
+      `,
+      errors: [
+        {
+          column: 16,
+          endColumn: 19,
+          endLine: 2,
+          line: 2,
+          messageId: 'onlyStatic',
+        },
+      ],
+    },
+    {
+      code: `
+abstract class Foo {
+  constructor() {}
+}
+      `,
+      errors: [
+        {
+          column: 16,
+          endColumn: 19,
+          endLine: 2,
+          line: 2,
+          messageId: 'onlyConstructor',
+        },
+      ],
+    },
+    {
+      code: `
+class Foo {
+  static accessor prop: string;
+}
+      `,
+      // `accessor` keyword requires TS 4.9
+      dependencyConstraints: { typescript: '4.9' },
+      errors: [
+        {
+          column: 7,
+          endColumn: 10,
+          endLine: 2,
+          line: 2,
+          messageId: 'onlyStatic',
+        },
+      ],
+    },
+    {
+      code: `
+abstract class Foo {
+  static accessor prop: string;
+}
+      `,
+      // `accessor` keyword requires TS 4.9
+      dependencyConstraints: { typescript: '4.9' },
+      errors: [
+        {
+          column: 16,
+          endColumn: 19,
+          endLine: 2,
+          line: 2,
+          messageId: 'onlyStatic',
         },
       ],
     },

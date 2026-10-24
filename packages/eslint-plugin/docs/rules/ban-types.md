@@ -1,75 +1,29 @@
-# Enforces that types will not to be used (ban-types)
+---
+displayed_sidebar: rulesSidebar
+---
 
-Bans specific types from being used. Does not ban the corresponding runtime objects from being used.
+:::danger Deprecated
 
-## Rule Details
+The old `ban-types` rule encompassed multiple areas of functionality, and so has been split into several rules.
 
-Examples of **incorrect** code for this rule `"String": "Use string instead"`
+**[`no-restricted-types`](./no-restricted-types.mdx)** is the new rule for banning a configurable list of type names.
+It has no options enabled by default and is akin to rules like [`no-restricted-globals`](https://eslint.org/docs/latest/rules/no-restricted-globals), [`no-restricted-properties`](https://eslint.org/docs/latest/rules/no-restricted-properties), and [`no-restricted-syntax`](https://eslint.org/docs/latest/rules/no-restricted-syntax).
 
-```ts
-class Foo<F = String> extends Bar<String> implements Baz<String> {
-  constructor(foo: String) {}
+The default options from `ban-types` are now covered by:
 
-  exit(): Array<String> {
-    const foo: String = 1 as String;
-  }
-}
-```
+- **[`no-empty-object-type`](./no-empty-object-type.mdx)**: banning the built-in `{}` type in confusing locations
+- **[`no-unsafe-function-type`](./no-unsafe-function-type.mdx)**: banning the built-in `Function`
+- **[`no-wrapper-object-types`](./no-wrapper-object-types.mdx)**: banning `Object` and built-in class wrappers such as `Number`
 
-Examples of **correct** code for this rule `"String": "Use string instead"`
+`ban-types` itself is removed in typescript-eslint v8.
 
-```ts
-class Foo<F = string> extends Bar<string> implements Baz<string> {
-  constructor(foo: string) {}
+- See [Announcing typescript-eslint v8 Beta](/blog/announcing-typescript-eslint-v8-beta) for the changes.
+- See [Revamping the `ban-types` rule](/blog/revamping-the-ban-types-rule) for historical context and more details on the new rules.
 
-  exit(): Array<string> {
-    const foo: string = 1 as string;
-  }
-}
-```
+:::
 
-## Options
+<!-- This doc file has been left on purpose because `ban-types` is a well-known
+rule. This exists to help direct people to the replacement rules.
 
-```CJSON
-{
-    "@typescript-eslint/ban-types": ["error", {
-        "types": {
-            // report usages of the type using the default error message
-            "Foo": null,
-
-            // add a custom message to help explain why not to use it
-            "Bar": "Don't use bar!",
-
-            // add a custom message, AND tell the plugin how to fix it
-            "String": {
-                "message": "Use string instead",
-                "fixWith": "string"
-            }
-        }
-    }
-}
-```
-
-### Example
-
-```json
-{
-  "@typescript-eslint/ban-types": [
-    "error",
-    {
-      "types": {
-        "Array": null,
-        "Object": "Use {} instead",
-        "String": {
-          "message": "Use string instead",
-          "fixWith": "string"
-        }
-      }
-    }
-  ]
-}
-```
-
-## Compatibility
-
-- TSLint: [ban-types](https://palantir.github.io/tslint/rules/ban-types/)
+Note that there is no actual way to get to this page in the normal navigation,
+so end-users will only be able to get to this page from the search bar. -->

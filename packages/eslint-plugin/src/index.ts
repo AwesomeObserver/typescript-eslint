@@ -1,22 +1,23 @@
-import requireIndex from 'requireindex';
-import path from 'path';
+/* eslint-disable import/first -- intentionally executing code before rest of the require()s. This will not work with ESM. */
 
-import recommended from './configs/recommended.json';
+import * as ts from 'typescript';
 
-const rules = requireIndex(path.join(__dirname, 'rules'));
-// eslint expects the rule to be on rules[name], not rules[name].default
-const rulesWithoutDefault = Object.keys(rules).reduce<Record<string, any>>(
-  (acc, ruleName) => {
-    acc[ruleName] = rules[ruleName].default;
-    return acc;
-  },
-  {},
-);
+const [versionMajor, _versionMinor] = ts.versionMajorMinor
+  .split('.')
+  .map(Number);
 
-// import all rules in lib/rules
-export = {
-  rules: rulesWithoutDefault,
-  configs: {
-    recommended,
-  },
-};
+if (versionMajor >= 7) {
+  // eslint-disable-next-line no-console
+  console.error(
+    [
+      'typescript-eslint does not support TS 7.0.',
+      'Please see https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-6.0 to run typescript-eslint using the TS 6 API.',
+      "See also https://github.com/typescript-eslint/typescript-eslint/issues/10940 for tracking typescript-eslint's support for TS >=7.1",
+    ].join('\n'),
+  );
+  throw new Error('typescript-eslint does not support TS 7.0.');
+}
+
+import rawPlugin from './raw-plugin';
+
+export = rawPlugin.plugin;

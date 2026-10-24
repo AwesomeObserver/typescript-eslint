@@ -1,97 +1,147 @@
-import { AST_NODE_TYPES, TSESTree } from '@typescript-eslint/typescript-estree';
-import { ReportDescriptor } from 'ts-eslint';
-import * as util from '../util';
+import type { TSESTree } from '@typescript-eslint/utils';
 
-type Options = [
+import { AST_NODE_TYPES, AST_TOKEN_TYPES } from '@typescript-eslint/utils';
+
+import { createRule } from '../util';
+
+type Values =
+  | 'always'
+  | 'in-intersections'
+  | 'in-unions'
+  | 'in-unions-and-intersections'
+  | 'never';
+
+export type Options = [
   {
-    allowAliases?:
-      | 'always'
-      | 'never'
-      | 'in-unions'
-      | 'in-intersections'
-      | 'in-unions-and-intersections';
+    allowAliases?: Values;
     allowCallbacks?: 'always' | 'never';
-    allowLiterals?:
-      | 'always'
-      | 'never'
-      | 'in-unions'
-      | 'in-intersections'
-      | 'in-unions-and-intersections';
-    allowMappedTypes?:
-      | 'always'
-      | 'never'
-      | 'in-unions'
-      | 'in-intersections'
-      | 'in-unions-and-intersections';
-  }
+    allowConditionalTypes?: 'always' | 'never';
+    allowConstructors?: 'always' | 'never';
+    allowGenerics?: 'always' | 'never';
+    allowLiterals?: Values;
+    allowMappedTypes?: Values;
+    allowTupleTypes?: Values;
+  },
 ];
-type MessageIds = 'noTypeAlias' | 'noCompositionAlias';
+export type MessageIds = 'noCompositionAlias' | 'noTypeAlias';
 
-export default util.createRule<Options, MessageIds>({
+type CompositionType =
+  AST_NODE_TYPES.TSIntersectionType | AST_NODE_TYPES.TSUnionType;
+interface TypeWithLabel {
+  compositionType: CompositionType | null;
+  node: TSESTree.Node;
+}
+
+export default createRule<Options, MessageIds>({
   name: 'no-type-alias',
   meta: {
     type: 'suggestion',
+    deprecated: {
+      deprecatedSince: '6.0.0',
+      replacedBy: [
+        {
+          rule: {
+            name: '@typescript-eslint/consistent-type-definitions',
+            url: 'https://typescript-eslint.io/rules/consistent-type-definitions',
+          },
+        },
+      ],
+      url: 'https://github.com/typescript-eslint/typescript-eslint/pull/6229',
+    },
     docs: {
-      description: 'Disallow the use of type aliases',
-      tslintRuleName: 'interface-over-type-literal',
-      category: 'Stylistic Issues',
-      recommended: false,
+      description: 'Disallow type aliases',
+      // too opinionated to be recommended
     },
     messages: {
-      noTypeAlias: 'Type {{alias}} are not allowed.',
       noCompositionAlias:
         '{{typeName}} in {{compositionType}} types are not allowed.',
+      noTypeAlias: 'Type {{alias}} are not allowed.',
     },
     schema: [
       {
         type: 'object',
-        properties: {
-          allowAliases: {
+        $defs: {
+          expandedOptions: {
+            type: 'string',
             enum: [
               'always',
               'never',
               'in-unions',
               'in-intersections',
               'in-unions-and-intersections',
-            ],
+            ] satisfies Values[],
           },
-          allowCallbacks: {
+          simpleOptions: {
+            type: 'string',
             enum: ['always', 'never'],
-          },
-          allowLiterals: {
-            enum: [
-              'always',
-              'never',
-              'in-unions',
-              'in-intersections',
-              'in-unions-and-intersections',
-            ],
-          },
-          allowMappedTypes: {
-            enum: [
-              'always',
-              'never',
-              'in-unions',
-              'in-intersections',
-              'in-unions-and-intersections',
-            ],
           },
         },
         additionalProperties: false,
+        properties: {
+          allowAliases: {
+            $ref: '#/items/0/$defs/expandedOptions',
+            description: 'Whether to allow direct one-to-one type aliases.',
+          },
+          allowCallbacks: {
+            $ref: '#/items/0/$defs/simpleOptions',
+            description: 'Whether to allow type aliases for callbacks.',
+          },
+          allowConditionalTypes: {
+            $ref: '#/items/0/$defs/simpleOptions',
+            description: 'Whether to allow type aliases for conditional types.',
+          },
+          allowConstructors: {
+            $ref: '#/items/0/$defs/simpleOptions',
+            description: 'Whether to allow type aliases with constructors.',
+          },
+          allowGenerics: {
+            $ref: '#/items/0/$defs/simpleOptions',
+            description: 'Whether to allow type aliases with generic types.',
+          },
+          allowLiterals: {
+            $ref: '#/items/0/$defs/expandedOptions',
+            description:
+              'Whether to allow type aliases with object literal types.',
+          },
+          allowMappedTypes: {
+            $ref: '#/items/0/$defs/expandedOptions',
+            description: 'Whether to allow type aliases with mapped types.',
+          },
+          allowTupleTypes: {
+            $ref: '#/items/0/$defs/expandedOptions',
+            description: 'Whether to allow type aliases with tuple types.',
+          },
+        },
       },
     ],
   },
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- For compatibility with ESLint 8, see #12842
   defaultOptions: [
     {
       allowAliases: 'never',
       allowCallbacks: 'never',
+      allowConditionalTypes: 'never',
+      allowConstructors: 'never',
+      allowGenerics: 'never',
       allowLiterals: 'never',
       allowMappedTypes: 'never',
+      allowTupleTypes: 'never',
     },
   ],
   create(
     context,
-    [{ allowAliases, allowCallbacks, allowLiterals, allowMappedTypes }],
+    [
+      {
+        allowAliases,
+        allowCallbacks,
+        allowConditionalTypes,
+        allowConstructors,
+        allowGenerics,
+        allowLiterals,
+        allowMappedTypes,
+        allowTupleTypes,
+      },
+    ],
   ) {
     const unions = ['always', 'in-unions', 'in-unions-and-intersections'];
     const intersections = [
@@ -104,24 +154,15 @@ export default util.createRule<Options, MessageIds>({
       'in-intersections',
       'in-unions-and-intersections',
     ];
-    const aliasTypes = [
+    const aliasTypes = new Set([
       AST_NODE_TYPES.TSArrayType,
-      AST_NODE_TYPES.TSTypeReference,
+      AST_NODE_TYPES.TSImportType,
+      AST_NODE_TYPES.TSIndexedAccessType,
       AST_NODE_TYPES.TSLiteralType,
+      AST_NODE_TYPES.TSTemplateLiteralType,
       AST_NODE_TYPES.TSTypeQuery,
-    ];
-
-    type CompositionType = TSESTree.TSUnionType | TSESTree.TSIntersectionType;
-    /**
-     * Determines if the given node is a union or an intersection.
-     */
-    function isComposition(node: TSESTree.TypeNode): node is CompositionType {
-      return (
-        node &&
-        (node.type === AST_NODE_TYPES.TSUnionType ||
-          node.type === AST_NODE_TYPES.TSIntersectionType)
-      );
-    }
+      AST_NODE_TYPES.TSTypeReference,
+    ]);
 
     /**
      * Determines if the composition type is supported by the allowed flags.
@@ -131,54 +172,17 @@ export default util.createRule<Options, MessageIds>({
      */
     function isSupportedComposition(
       isTopLevel: boolean,
-      compositionType: string | undefined,
+      compositionType: CompositionType | null,
       allowed: string,
     ): boolean {
       return (
-        compositions.indexOf(allowed) === -1 ||
+        !compositions.includes(allowed) ||
         (!isTopLevel &&
           ((compositionType === AST_NODE_TYPES.TSUnionType &&
-            unions.indexOf(allowed) > -1) ||
+            unions.includes(allowed)) ||
             (compositionType === AST_NODE_TYPES.TSIntersectionType &&
-              intersections.indexOf(allowed) > -1)))
+              intersections.includes(allowed))))
       );
-    }
-
-    /**
-     * Determines if the given node is an alias type (keywords, arrays, type references and constants).
-     * @param node the node to be evaluated.
-     */
-    function isAlias(
-      node: TSESTree.Node,
-    ): boolean /* not worth enumerating the ~25 individual types here */ {
-      return (
-        node &&
-        (/Keyword$/.test(node.type) || aliasTypes.indexOf(node.type) > -1)
-      );
-    }
-
-    /**
-     * Determines if the given node is a callback type.
-     * @param node the node to be evaluated.
-     */
-    function isCallback(node: TSESTree.Node): node is TSESTree.TSFunctionType {
-      return node && node.type === AST_NODE_TYPES.TSFunctionType;
-    }
-
-    /**
-     * Determines if the given node is a literal type (objects).
-     * @param node the node to be evaluated.
-     */
-    function isLiteral(node: TSESTree.Node): node is TSESTree.TSTypeLiteral {
-      return node && node.type === AST_NODE_TYPES.TSTypeLiteral;
-    }
-
-    /**
-     * Determines if the given node is a mapped type.
-     * @param node the node to be evaluated.
-     */
-    function isMappedType(node: TSESTree.Node): node is TSESTree.TSMappedType {
-      return node && node.type === AST_NODE_TYPES.TSMappedType;
     }
 
     /**
@@ -189,23 +193,23 @@ export default util.createRule<Options, MessageIds>({
      * @param isRoot a flag indicating we are dealing with the top level declaration.
      * @param type the kind of type alias being validated.
      */
-    function getMessage(
+    function reportError(
       node: TSESTree.Node,
-      compositionType: string | undefined,
+      compositionType: CompositionType | null,
       isRoot: boolean,
-      type?: string,
-    ): ReportDescriptor<MessageIds> {
+      type: string,
+    ): void {
       if (isRoot) {
-        return {
+        return context.report({
           node,
           messageId: 'noTypeAlias',
           data: {
-            alias: type || 'aliases',
+            alias: type.toLowerCase(),
           },
-        };
+        });
       }
 
-      return {
+      return context.report({
         node,
         messageId: 'noCompositionAlias',
         data: {
@@ -213,84 +217,140 @@ export default util.createRule<Options, MessageIds>({
             compositionType === AST_NODE_TYPES.TSUnionType
               ? 'union'
               : 'intersection',
-          typeName: util.upperCaseFirst(type!),
+          typeName: type,
         },
-      };
-    }
-
-    /**
-     * Validates the node looking for aliases, callbacks and literals.
-     * @param node the node to be validated.
-     * @param isTopLevel a flag indicating this is the top level node.
-     * @param compositionType the type of composition this alias is part of (undefined if not
-     *                                  part of a composition)
-     */
-    function validateTypeAliases(
-      node: TSESTree.Node,
-      isTopLevel: boolean,
-      compositionType?: string,
-    ): void {
-      if (isCallback(node)) {
-        if (allowCallbacks === 'never') {
-          context.report(
-            getMessage(node, compositionType, isTopLevel, 'callbacks'),
-          );
-        }
-      } else if (isLiteral(node)) {
-        if (
-          allowLiterals === 'never' ||
-          !isSupportedComposition(isTopLevel, compositionType, allowLiterals!)
-        ) {
-          context.report(
-            getMessage(node, compositionType, isTopLevel, 'literals'),
-          );
-        }
-      } else if (isMappedType(node)) {
-        if (
-          allowMappedTypes === 'never' ||
-          !isSupportedComposition(
-            isTopLevel,
-            compositionType,
-            allowMappedTypes!,
-          )
-        ) {
-          context.report(
-            getMessage(node, compositionType, isTopLevel, 'mapped types'),
-          );
-        }
-      } else if (isAlias(node)) {
-        if (
-          allowAliases === 'never' ||
-          !isSupportedComposition(isTopLevel, compositionType, allowAliases!)
-        ) {
-          context.report(
-            getMessage(node, compositionType, isTopLevel, 'aliases'),
-          );
-        }
-      } else {
-        context.report(getMessage(node, compositionType, isTopLevel));
-      }
-    }
-
-    /**
-     * Validates compositions (unions and/or intersections).
-     */
-    function validateCompositions(node: CompositionType): void {
-      node.types.forEach(type => {
-        if (isComposition(type)) {
-          validateCompositions(type);
-        } else {
-          validateTypeAliases(type, false, node.type);
-        }
       });
     }
 
+    const isValidTupleType = (type: TypeWithLabel): boolean => {
+      if (type.node.type === AST_NODE_TYPES.TSTupleType) {
+        return true;
+      }
+      if (
+        type.node.type === AST_NODE_TYPES.TSTypeOperator &&
+        ['keyof', 'readonly'].includes(type.node.operator) &&
+        type.node.typeAnnotation?.type === AST_NODE_TYPES.TSTupleType
+      ) {
+        return true;
+      }
+      return false;
+    };
+
+    const isValidGeneric = (type: TypeWithLabel): boolean => {
+      return (
+        type.node.type === AST_NODE_TYPES.TSTypeReference &&
+        type.node.typeArguments != null
+      );
+    };
+
+    const checkAndReport = (
+      optionValue: Values,
+      isTopLevel: boolean,
+      type: TypeWithLabel,
+      label: string,
+    ): void => {
+      if (
+        optionValue === 'never' ||
+        !isSupportedComposition(isTopLevel, type.compositionType, optionValue)
+      ) {
+        reportError(type.node, type.compositionType, isTopLevel, label);
+      }
+    };
+
+    /**
+     * Validates the node looking for aliases, callbacks and literals.
+     * @param type the type of composition this alias is part of (null if not
+     *                                  part of a composition)
+     * @param isTopLevel a flag indicating this is the top level node.
+     */
+    function validateTypeAliases(
+      type: TypeWithLabel,
+      isTopLevel = false,
+    ): void {
+      // https://github.com/typescript-eslint/typescript-eslint/issues/5439
+      /* eslint-disable @typescript-eslint/no-non-null-assertion */
+      if (type.node.type === AST_NODE_TYPES.TSFunctionType) {
+        // callback
+        if (allowCallbacks === 'never') {
+          reportError(type.node, type.compositionType, isTopLevel, 'Callbacks');
+        }
+      } else if (type.node.type === AST_NODE_TYPES.TSConditionalType) {
+        // conditional type
+        if (allowConditionalTypes === 'never') {
+          reportError(
+            type.node,
+            type.compositionType,
+            isTopLevel,
+            'Conditional types',
+          );
+        }
+      } else if (type.node.type === AST_NODE_TYPES.TSConstructorType) {
+        if (allowConstructors === 'never') {
+          reportError(
+            type.node,
+            type.compositionType,
+            isTopLevel,
+            'Constructors',
+          );
+        }
+      } else if (type.node.type === AST_NODE_TYPES.TSTypeLiteral) {
+        // literal object type
+        checkAndReport(allowLiterals!, isTopLevel, type, 'Literals');
+      } else if (type.node.type === AST_NODE_TYPES.TSMappedType) {
+        // mapped type
+        checkAndReport(allowMappedTypes!, isTopLevel, type, 'Mapped types');
+      } else if (isValidTupleType(type)) {
+        // tuple types
+        checkAndReport(allowTupleTypes!, isTopLevel, type, 'Tuple Types');
+      } else if (isValidGeneric(type)) {
+        if (allowGenerics === 'never') {
+          reportError(type.node, type.compositionType, isTopLevel, 'Generics');
+        }
+      } else if (
+        type.node.type.endsWith(AST_TOKEN_TYPES.Keyword) ||
+        aliasTypes.has(type.node.type) ||
+        (type.node.type === AST_NODE_TYPES.TSTypeOperator &&
+          (type.node.operator === 'keyof' ||
+            (type.node.operator === 'readonly' &&
+              type.node.typeAnnotation &&
+              aliasTypes.has(type.node.typeAnnotation.type))))
+      ) {
+        // alias / keyword
+        checkAndReport(allowAliases!, isTopLevel, type, 'Aliases');
+      } else {
+        // unhandled type - shouldn't happen
+        reportError(type.node, type.compositionType, isTopLevel, 'Unhandled');
+      }
+      /* eslint-enable @typescript-eslint/no-non-null-assertion */
+    }
+
+    /**
+     * Flatten the given type into an array of its dependencies
+     */
+    function getTypes(
+      node: TSESTree.Node,
+      compositionType: CompositionType | null = null,
+    ): TypeWithLabel[] {
+      if (
+        node.type === AST_NODE_TYPES.TSUnionType ||
+        node.type === AST_NODE_TYPES.TSIntersectionType
+      ) {
+        return node.types.flatMap(type => getTypes(type, node.type));
+      }
+      return [{ node, compositionType }];
+    }
+
     return {
-      TSTypeAliasDeclaration(node) {
-        if (isComposition(node.typeAnnotation)) {
-          validateCompositions(node.typeAnnotation);
+      TSTypeAliasDeclaration(node): void {
+        const types = getTypes(node.typeAnnotation);
+        if (types.length === 1) {
+          // is a top level type annotation
+          validateTypeAliases(types[0], true);
         } else {
-          validateTypeAliases(node.typeAnnotation, true);
+          // is a composition type
+          types.forEach(type => {
+            validateTypeAliases(type);
+          });
         }
       },
     };

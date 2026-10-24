@@ -1,8 +1,18 @@
 {
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "declaration": true,
-    "outDir": "./dist"
-  },
-  "include": ["src", "typings"]
+  "extends": "../../tsconfig.build.json",
+  "compilerOptions": {},
+  "references": [
+    {
+      "path": "../visitor-keys/tsconfig.build.json"
+    },
+    {
+      "path": "../typescript-estree/tsconfig.build.json"
+    },
+    {
+      "path": "../types/tsconfig.build.json"
+    },
+    {
+      "path": "../scope-manager/tsconfig.build.json"
+    }
+  ]
 }

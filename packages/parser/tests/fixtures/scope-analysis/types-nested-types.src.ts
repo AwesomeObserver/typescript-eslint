@@ -1,1 +1,2 @@
-type Foo = [number, string?, boolean?] | [{}, [number?] | null & boolean[]] & {}
+type Foo =
+  [number, string?, boolean?] | ([{}, [number?] | (null & boolean[])] & {});

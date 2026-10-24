@@ -1,37 +1,4 @@
-import * as tsutils from 'tsutils';
-import ts from 'typescript';
+export type MakeRequired<Base, Key extends keyof Base> = Omit<Base, Key> &
+  Required<Record<Key, NonNullable<Base[Key]>>>;
 
-/**
- * @param type Type being checked by name.
- * @param allowedNames Symbol names checking on the type.
- * @returns Whether the type is, extends, or contains any of the allowed names.
- */
-export function containsTypeByName(
-  type: ts.Type,
-  allowedNames: Set<string>,
-): boolean {
-  if (tsutils.isTypeFlagSet(type, ts.TypeFlags.Any | ts.TypeFlags.Unknown)) {
-    return true;
-  }
-
-  if (tsutils.isTypeReference(type)) {
-    type = type.target;
-  }
-
-  if (
-    typeof type.symbol !== 'undefined' &&
-    allowedNames.has(type.symbol.name)
-  ) {
-    return true;
-  }
-
-  if (tsutils.isUnionOrIntersectionType(type)) {
-    return type.types.some(t => containsTypeByName(t, allowedNames));
-  }
-
-  const bases = type.getBaseTypes();
-  return (
-    typeof bases !== 'undefined' &&
-    bases.some(t => containsTypeByName(t, allowedNames))
-  );
-}
+export type ValueOf<T> = T[keyof T];

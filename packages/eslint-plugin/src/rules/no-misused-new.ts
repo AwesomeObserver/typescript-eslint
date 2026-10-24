@@ -1,33 +1,35 @@
-import { TSESTree, AST_NODE_TYPES } from '@typescript-eslint/typescript-estree';
-import * as util from '../util';
+import type { TSESTree } from '@typescript-eslint/utils';
 
-export default util.createRule({
+import { AST_NODE_TYPES } from '@typescript-eslint/utils';
+
+import { createRule } from '../util';
+
+export default createRule({
   name: 'no-misused-new',
   meta: {
     type: 'problem',
     docs: {
-      description: 'Enforce valid definition of `new` and `constructor`.',
-      tslintRuleName: 'no-misused-new',
-      category: 'Best Practices',
-      recommended: 'error',
+      description: 'Enforce valid definition of `new` and `constructor`',
+      recommended: 'recommended',
+    },
+    messages: {
+      errorMessageClass: 'Class cannot have method named `new`.',
+      errorMessageInterface: 'Interfaces cannot be constructed, only classes.',
     },
     schema: [],
-    messages: {
-      errorMessageInterface: 'Interfaces cannot be constructed, only classes.',
-      errorMessageClass: 'Class cannon have method named `new`.',
-    },
   },
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- For compatibility with ESLint 8, see #12842
   defaultOptions: [],
   create(context) {
     /**
-     * @param {ASTNode} node type to be inspected.
+     * @param node type to be inspected.
      * @returns name of simple type or null
      */
     function getTypeReferenceName(
       node:
+        | TSESTree.EntityName
         | TSESTree.TSTypeAnnotation
         | TSESTree.TypeNode
-        | TSESTree.EntityName
         | undefined,
     ): string | null {
       if (node) {
@@ -46,18 +48,24 @@ export default util.createRule({
     }
 
     /**
-     * @param {ASTNode} parent parent node.
-     * @param {ASTNode} returnType type to be compared
+     * @param parent parent node.
+     * @param returnType type to be compared
      */
     function isMatchingParentType(
-      parent: undefined | TSESTree.Node,
+      parent:
+        | TSESTree.ClassDeclaration
+        | TSESTree.ClassExpression
+        | TSESTree.Identifier
+        | TSESTree.TSInterfaceDeclaration
+        | undefined,
       returnType: TSESTree.TSTypeAnnotation | undefined,
     ): boolean {
       if (
         parent &&
-        'id' in parent &&
-        parent.id &&
-        parent.id.type === AST_NODE_TYPES.Identifier
+        (parent.type === AST_NODE_TYPES.ClassDeclaration ||
+          parent.type === AST_NODE_TYPES.ClassExpression ||
+          parent.type === AST_NODE_TYPES.TSInterfaceDeclaration) &&
+        parent.id
       ) {
         return getTypeReferenceName(returnType) === parent.id.name;
       }
@@ -65,12 +73,25 @@ export default util.createRule({
     }
 
     return {
+      "ClassBody > MethodDefinition[key.name='new']"(
+        node: TSESTree.MethodDefinition,
+      ): void {
+        if (
+          node.value.type === AST_NODE_TYPES.TSEmptyBodyFunctionExpression &&
+          isMatchingParentType(node.parent.parent, node.value.returnType)
+        ) {
+          context.report({
+            node,
+            messageId: 'errorMessageClass',
+          });
+        }
+      },
       'TSInterfaceBody > TSConstructSignatureDeclaration'(
         node: TSESTree.TSConstructSignatureDeclaration,
-      ) {
+      ): void {
         if (
           isMatchingParentType(
-            node.parent!.parent as TSESTree.TSInterfaceDeclaration,
+            node.parent.parent as TSESTree.TSInterfaceDeclaration,
             node.returnType,
           )
         ) {
@@ -83,26 +104,11 @@ export default util.createRule({
       },
       "TSMethodSignature[key.name='constructor']"(
         node: TSESTree.TSMethodSignature,
-      ) {
+      ): void {
         context.report({
           node,
           messageId: 'errorMessageInterface',
         });
-      },
-      "ClassBody > MethodDefinition[key.name='new']"(
-        node: TSESTree.MethodDefinition,
-      ) {
-        if (node.value.type === AST_NODE_TYPES.TSEmptyBodyFunctionExpression) {
-          if (
-            node.parent &&
-            isMatchingParentType(node.parent.parent, node.value.returnType)
-          ) {
-            context.report({
-              node,
-              messageId: 'errorMessageClass',
-            });
-          }
-        }
       },
     };
   },

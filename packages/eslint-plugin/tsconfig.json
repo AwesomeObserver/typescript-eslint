@@ -1,11 +1,16 @@
 {
-  "extends": "./tsconfig.build.json",
-  "include": [
-    "src",
-    "typings",
-    // include the parser's ambient typings because the parser exports them in its type defs
-    "../parser/typings",
-    "tests",
-    "tools"
+  "extends": "../../tsconfig.base.json",
+  "files": [],
+  "include": [],
+  "references": [
+    {
+      "path": "./tsconfig.build.json"
+    },
+    {
+      "path": "./tsconfig.spec.json"
+    },
+    {
+      "path": "./tsconfig.tools.json"
+    }
   ]
 }

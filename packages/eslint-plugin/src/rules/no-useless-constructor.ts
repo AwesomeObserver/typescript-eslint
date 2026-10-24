@@ -1,9 +1,19 @@
-import { TSESTree, AST_NODE_TYPES } from '@typescript-eslint/typescript-estree';
-import baseRule from 'eslint/lib/rules/no-useless-constructor';
-import * as util from '../util';
+import type { TSESTree } from '@typescript-eslint/utils';
 
-type Options = util.InferOptionsTypeFromRule<typeof baseRule>;
-type MessageIds = util.InferMessageIdsTypeFromRule<typeof baseRule>;
+import { AST_NODE_TYPES } from '@typescript-eslint/utils';
+
+import type {
+  InferMessageIdsTypeFromRule,
+  InferOptionsTypeFromRule,
+} from '../util';
+
+import { createRule } from '../util';
+import { getESLintCoreRule } from '../util/getESLintCoreRule';
+
+const baseRule = getESLintCoreRule('no-useless-constructor');
+
+export type Options = InferOptionsTypeFromRule<typeof baseRule>;
+export type MessageIds = InferMessageIdsTypeFromRule<typeof baseRule>;
 
 /**
  * Check if method with accessibility is not useless
@@ -14,13 +24,7 @@ function checkAccessibility(node: TSESTree.MethodDefinition): boolean {
     case 'private':
       return false;
     case 'public':
-      if (
-        node.parent &&
-        node.parent.type === AST_NODE_TYPES.ClassBody &&
-        node.parent.parent &&
-        'superClass' in node.parent.parent &&
-        node.parent.parent.superClass
-      ) {
+      if (node.parent.parent.superClass) {
         return false;
       }
       break;
@@ -29,36 +33,37 @@ function checkAccessibility(node: TSESTree.MethodDefinition): boolean {
 }
 
 /**
- * Check if method is not unless due to typescript parameter properties
+ * Check if method is not useless due to typescript parameter properties and decorators
  */
 function checkParams(node: TSESTree.MethodDefinition): boolean {
-  return (
-    !node.value.params ||
-    !node.value.params.some(
-      param => param.type === AST_NODE_TYPES.TSParameterProperty,
-    )
+  return !node.value.params.some(
+    param =>
+      param.type === AST_NODE_TYPES.TSParameterProperty ||
+      param.decorators.length,
   );
 }
 
-export default util.createRule<Options, MessageIds>({
+export default createRule<Options, MessageIds>({
   name: 'no-useless-constructor',
   meta: {
     type: 'problem',
+    // defaultOptions, -- base rule does not use defaultOptions
     docs: {
       description: 'Disallow unnecessary constructors',
-      category: 'Best Practices',
-      recommended: false,
+      extendsBaseRule: true,
+      recommended: 'strict',
     },
-    schema: baseRule.meta.schema,
+    hasSuggestions: baseRule.meta.hasSuggestions,
     messages: baseRule.meta.messages,
+    schema: baseRule.meta.schema,
   },
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- For compatibility with ESLint 8, see #12842
   defaultOptions: [],
   create(context) {
     const rules = baseRule.create(context);
     return {
-      MethodDefinition(node) {
+      MethodDefinition(node): void {
         if (
-          node.value &&
           node.value.type === AST_NODE_TYPES.FunctionExpression &&
           checkAccessibility(node) &&
           checkParams(node)

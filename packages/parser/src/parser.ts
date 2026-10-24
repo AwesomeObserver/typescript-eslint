@@ -1,27 +1,43 @@
-import traverser from 'eslint/lib/util/traverser';
-import {
-  AST_NODE_TYPES,
-  parseAndGenerateServices,
-  ParserOptions as ParserOptionsTsESTree,
+import type {
+  AnalyzeOptions,
+  ScopeManager,
+} from '@typescript-eslint/scope-manager';
+import type { Lib, ParserOptions, TSESTree } from '@typescript-eslint/types';
+import type {
+  AST,
   ParserServices,
+  TSESTreeOptions,
 } from '@typescript-eslint/typescript-estree';
-import { analyzeScope } from './analyze-scope';
-import { ParserOptions } from './parser-options';
-import { visitorKeys } from './visitor-keys';
+import type { VisitorKeys } from '@typescript-eslint/visitor-keys';
+import type * as ts from 'typescript';
 
-// note - cannot migrate this to an import statement because it will make TSC copy the package.json to the dist folder
-const packageJSON = require('../package.json');
+import { analyze } from '@typescript-eslint/scope-manager';
+import {
+  parseAndGenerateServices,
+  typescriptVersionIsAtLeast,
+} from '@typescript-eslint/typescript-estree';
+import { visitorKeys } from '@typescript-eslint/visitor-keys';
+import debug from 'debug';
+import { ScriptTarget } from 'typescript';
+
+const log = debug('typescript-eslint:parser:parser');
+
+interface ESLintProgram extends AST<{ comment: true; tokens: true }> {
+  comments: TSESTree.Comment[];
+  range: [number, number];
+  tokens: TSESTree.Token[];
+}
 
 interface ParseForESLintResult {
-  ast: any;
+  ast: ESLintProgram;
+  scopeManager: ScopeManager;
   services: ParserServices;
-  visitorKeys: typeof visitorKeys;
-  scopeManager: ReturnType<typeof analyzeScope>;
+  visitorKeys: VisitorKeys;
 }
 
 function validateBoolean(
   value: boolean | undefined,
-  fallback: boolean = false,
+  fallback = false,
 ): boolean {
   if (typeof value !== 'boolean') {
     return fallback;
@@ -29,78 +45,165 @@ function validateBoolean(
   return value;
 }
 
-//------------------------------------------------------------------------------
-// Public
-//------------------------------------------------------------------------------
+const LIB_FILENAME_REGEX = /lib\.(.+)\.d\.[cm]?ts$/;
+function getLib(compilerOptions: ts.CompilerOptions): Lib[] {
+  if (compilerOptions.lib) {
+    return compilerOptions.lib
+      .map(lib => LIB_FILENAME_REGEX.exec(lib.toLowerCase())?.[1])
+      .filter((lib): lib is Lib => !!lib);
+  }
 
-export const version = packageJSON.version;
+  const defaultTarget = typescriptVersionIsAtLeast['6.0']
+    ? ScriptTarget.LatestStandard
+    : ScriptTarget.ES5; // eslint-disable-line @typescript-eslint/no-deprecated -- Deprecated in TS 6 but we support TS < 6
 
-export const Syntax = Object.freeze(AST_NODE_TYPES);
+  const target = compilerOptions.target ?? defaultTarget;
+  // https://github.com/microsoft/TypeScript/blob/35ff23d4b0cc715691323ebe54f523c16fe6e3a5/src/compiler/utilitiesPublic.ts#L312-L346
+  switch (target) {
+    case ScriptTarget.ES2015:
+      return ['es6'];
+    case ScriptTarget.ES2016:
+      return ['es2016.full'];
+    case ScriptTarget.ES2017:
+      return ['es2017.full'];
+    case ScriptTarget.ES2018:
+      return ['es2018.full'];
+    case ScriptTarget.ES2019:
+      return ['es2019.full'];
+    case ScriptTarget.ES2020:
+      return ['es2020.full'];
+    case ScriptTarget.ES2021:
+      return ['es2021.full'];
+    case ScriptTarget.ES2022:
+      return ['es2022.full'];
+    case ScriptTarget.ES2023:
+      return ['es2023.full'];
+    case ScriptTarget.ES2024:
+      return ['es2024.full'];
+    case ScriptTarget.ES2025:
+      return ['es2025.full'];
+    case ScriptTarget.ESNext:
+      return ['esnext.full'];
+    default:
+      return ['lib'];
+  }
+}
 
-export function parse(code: string, options?: ParserOptions) {
+export function parse(
+  code: string | ts.SourceFile,
+  options?: ParserOptions,
+): ParseForESLintResult['ast'] {
   return parseForESLint(code, options).ast;
 }
 
 export function parseForESLint(
-  code: string,
-  options?: ParserOptions | null,
+  code: string | ts.SourceFile,
+  parserOptions?: ParserOptions | null,
 ): ParseForESLintResult {
-  if (!options || typeof options !== 'object') {
-    options = {};
+  if (!parserOptions || typeof parserOptions !== 'object') {
+    parserOptions = {};
+  } else {
+    parserOptions = { ...parserOptions };
   }
   // https://eslint.org/docs/user-guide/configuring#specifying-parser-options
   // if sourceType is not provided by default eslint expect that it will be set to "script"
-  if (options.sourceType !== 'module' && options.sourceType !== 'script') {
-    options.sourceType = 'script';
+  if (
+    parserOptions.sourceType !== 'module' &&
+    parserOptions.sourceType !== 'script'
+  ) {
+    parserOptions.sourceType = 'script';
   }
-  if (typeof options.ecmaFeatures !== 'object') {
-    options.ecmaFeatures = {};
+  if (typeof parserOptions.ecmaFeatures !== 'object') {
+    parserOptions.ecmaFeatures = {};
   }
 
-  const parserOptions: ParserOptionsTsESTree = {};
-  Object.assign(parserOptions, options, {
-    useJSXTextNode: validateBoolean(options.useJSXTextNode, true),
-    jsx: validateBoolean(options.ecmaFeatures.jsx),
-  });
+  if (
+    parserOptions.onUnsupportedTypeScriptVersion != null &&
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- read for backwards compatibility
+    parserOptions.warnOnUnsupportedTypeScriptVersion != null
+  ) {
+    throw new Error(
+      'Cannot use both the `onUnsupportedTypeScriptVersion` and the deprecated `warnOnUnsupportedTypeScriptVersion` options. Please use only `onUnsupportedTypeScriptVersion`.',
+    );
+  }
 
-  if (typeof options.filePath === 'string') {
-    const tsx = options.filePath.endsWith('.tsx');
-    if (tsx || options.filePath.endsWith('.ts')) {
-      parserOptions.jsx = tsx;
+  const onUnsupportedTypeScriptVersion =
+    parserOptions.onUnsupportedTypeScriptVersion ??
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- read for backwards compatibility
+    (validateBoolean(parserOptions.warnOnUnsupportedTypeScriptVersion, true)
+      ? 'warn'
+      : 'ignore');
+
+  const tsestreeOptions = {
+    jsx: validateBoolean(parserOptions.ecmaFeatures.jsx),
+    ...parserOptions,
+    onUnsupportedTypeScriptVersion,
+    // Override errorOnTypeScriptSyntacticAndSemanticIssues and set it to false to prevent use from user config
+    // https://github.com/typescript-eslint/typescript-eslint/issues/8681#issuecomment-2000411834
+    errorOnTypeScriptSyntacticAndSemanticIssues: false,
+    // comment, loc, range, and tokens should always be set for ESLint usage
+    // https://github.com/typescript-eslint/typescript-eslint/issues/8347
+    comment: true,
+    loc: true,
+    range: true,
+    tokens: true,
+  } satisfies TSESTreeOptions;
+
+  const analyzeOptions: AnalyzeOptions = {
+    globalReturn: parserOptions.ecmaFeatures.globalReturn,
+    jsxFragmentName: parserOptions.jsxFragmentName,
+    jsxPragma: parserOptions.jsxPragma,
+    lib: parserOptions.lib,
+    sourceType: parserOptions.sourceType,
+  };
+
+  const { ast, services } = parseAndGenerateServices(code, tsestreeOptions);
+  ast.sourceType = parserOptions.sourceType;
+
+  if (services.program) {
+    // automatically apply the options configured for the program
+    const compilerOptions = services.program.getCompilerOptions();
+    if (analyzeOptions.lib == null) {
+      analyzeOptions.lib = getLib(compilerOptions);
+      log('Resolved libs from program: %o', analyzeOptions.lib);
+    }
+    if (
+      // eslint-disable-next-line @typescript-eslint/internal/eqeq-nullish
+      analyzeOptions.jsxPragma === undefined &&
+      compilerOptions.jsxFactory != null
+    ) {
+      // in case the user has specified something like "preact.h"
+      const factory = compilerOptions.jsxFactory.split('.')[0].trim();
+      analyzeOptions.jsxPragma = factory;
+      log('Resolved jsxPragma from program: %s', analyzeOptions.jsxPragma);
+    }
+    if (
+      // eslint-disable-next-line @typescript-eslint/internal/eqeq-nullish
+      analyzeOptions.jsxFragmentName === undefined &&
+      compilerOptions.jsxFragmentFactory != null
+    ) {
+      // in case the user has specified something like "preact.Fragment"
+      const fragFactory = compilerOptions.jsxFragmentFactory
+        .split('.')[0]
+        .trim();
+      analyzeOptions.jsxFragmentName = fragFactory;
+      log(
+        'Resolved jsxFragmentName from program: %s',
+        analyzeOptions.jsxFragmentName,
+      );
     }
   }
 
-  /**
-   * Allow the user to suppress the warning from typescript-estree if they are using an unsupported
-   * version of TypeScript
-   */
-  const warnOnUnsupportedTypeScriptVersion = validateBoolean(
-    options.warnOnUnsupportedTypeScriptVersion,
-    true,
-  );
-  if (!warnOnUnsupportedTypeScriptVersion) {
-    parserOptions.loggerFn = false;
-  }
+  const scopeManager = analyze(ast, analyzeOptions);
 
-  const { ast, services } = parseAndGenerateServices(code, parserOptions);
-  ast.sourceType = options.sourceType;
+  // if not defined - override from the parserOptions
+  services.emitDecoratorMetadata ??=
+    parserOptions.emitDecoratorMetadata === true;
+  services.experimentalDecorators ??=
+    parserOptions.experimentalDecorators === true;
+  services.isolatedDeclarations ??= parserOptions.isolatedDeclarations === true;
 
-  traverser.traverse(ast, {
-    enter(node: any) {
-      switch (node.type) {
-        // Function#body cannot be null in ESTree spec.
-        case 'FunctionExpression':
-          if (!node.body) {
-            node.type = `TSEmptyBody${node.type}` as AST_NODE_TYPES;
-          }
-          break;
-        // no default
-      }
-    },
-  });
-
-  const scopeManager = analyzeScope(ast, options);
-  return { ast, services, scopeManager, visitorKeys };
+  return { ast, scopeManager, services, visitorKeys };
 }
 
-export { ParserServices, ParserOptions };
+export type { ParserOptions } from '@typescript-eslint/types';

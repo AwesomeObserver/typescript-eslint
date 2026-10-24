@@ -1,8 +1,13 @@
 {
   "recommendations": [
-      "esbenp.prettier-vscode",
+      "davidanson.vscode-markdownlint",
       "dbaeumer.vscode-eslint",
-      "editorconfig.editorconfig"
+      "editorconfig.editorconfig",
+      "esbenp.prettier-vscode",
+      "streetsidesoftware.code-spell-checker",
+      "mrmlnc.vscode-json5",
+      "unifiedjs.vscode-mdx",
+      "vitest.explorer"
   ],
   "unwantedRecommendations": ["hookyqr.beautify", "dbaeumer.jshint"]
 }

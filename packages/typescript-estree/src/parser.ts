@@ -1,410 +1,281 @@
-import {
-  calculateProjectParserOptions,
-  createProgram,
-} from './tsconfig-parser';
-import semver from 'semver';
-import ts from 'typescript';
-import convert from './ast-converter';
+import type * as ts from 'typescript';
+
+import debug from 'debug';
+
+import type { ASTAndProgram, CanonicalPath } from './create-program/shared';
+import type {
+  ParserServices,
+  ParserServicesNodeMaps,
+  TSESTreeOptions,
+} from './parser-options';
+import type { ParseSettings } from './parseSettings';
+import type { TSESTree } from './ts-estree';
+
+import { astConverter } from './ast-converter';
 import { convertError } from './convert';
-import { firstDefined } from './node-utils';
-import { TSESTree } from './ts-estree';
-import { Extra, ParserOptions, ParserServices } from './parser-options';
-import { getFirstSemanticOrSyntacticError } from './semantic-errors';
+import { createIsolatedProgram } from './create-program/createIsolatedProgram';
+import { createProjectProgram } from './create-program/createProjectProgram';
+import {
+  createNoProgram,
+  createSourceFile,
+} from './create-program/createSourceFile';
+import { getWatchProgramsForProjects } from './create-program/getWatchProgramsForProjects';
+import {
+  createProgramFromConfigFile,
+  useProvidedPrograms,
+} from './create-program/useProvidedPrograms';
+import { createParserServices } from './createParserServices';
+import { createParseSettings } from './parseSettings/createParseSettings';
+import { getFirstSemanticOrSyntacticError } from './semantic-or-syntactic-errors';
+import { useProgramFromProjectService } from './useProgramFromProjectService';
+
+const log = debug('typescript-eslint:typescript-estree:parser');
 
 /**
- * This needs to be kept in sync with the top-level README.md in the
- * typescript-eslint monorepo
- */
-const SUPPORTED_TYPESCRIPT_VERSIONS = '>=3.2.1 <3.5.0';
-const ACTIVE_TYPESCRIPT_VERSION = ts.version;
-const isRunningSupportedTypeScriptVersion = semver.satisfies(
-  ACTIVE_TYPESCRIPT_VERSION,
-  SUPPORTED_TYPESCRIPT_VERSIONS,
-);
-
-let extra: Extra;
-let warnedAboutTSVersion = false;
-
-/**
- * Compute the filename based on the parser options.
+ * Cache existing programs for the single run use-case.
  *
- * Even if jsx option is set in typescript compiler, filename still has to
- * contain .tsx file extension.
- *
- * @param options Parser options
+ * clearProgramCache() is only intended to be used in testing to ensure the parser is clean between tests.
  */
-function getFileName({ jsx }: { jsx?: boolean }) {
-  return jsx ? 'estree.tsx' : 'estree.ts';
+const existingPrograms = new Map<CanonicalPath, ts.Program>();
+export function clearProgramCache(): void {
+  existingPrograms.clear();
+}
+
+const defaultProjectMatchedFiles = new Set<string>();
+export function clearDefaultProjectMatchedFiles(): void {
+  defaultProjectMatchedFiles.clear();
 }
 
 /**
- * Resets the extra config object
- */
-function resetExtra(): void {
-  extra = {
-    tokens: null,
-    range: false,
-    loc: false,
-    comment: false,
-    comments: [],
-    strict: false,
-    jsx: false,
-    useJSXTextNode: false,
-    log: console.log,
-    projects: [],
-    errorOnUnknownASTType: false,
-    errorOnTypeScriptSyntacticAndSemanticIssues: false,
-    code: '',
-    tsconfigRootDir: process.cwd(),
-    extraFileExtensions: [],
-  };
-}
-
-/**
- * @param code The code of the file being linted
- * @param options The config object
- * @returns If found, returns the source file corresponding to the code and the containing program
- */
-function getASTFromProject(code: string, options: ParserOptions) {
-  return firstDefined(
-    calculateProjectParserOptions(
-      code,
-      options.filePath || getFileName(options),
-      extra,
-    ),
-    currentProgram => {
-      const ast = currentProgram.getSourceFile(
-        options.filePath || getFileName(options),
-      );
-      return ast && { ast, program: currentProgram };
-    },
-  );
-}
-
-/**
- * @param code The code of the file being linted
- * @param options The config object
- * @returns If found, returns the source file corresponding to the code and the containing program
- */
-function getASTAndDefaultProject(code: string, options: ParserOptions) {
-  const fileName = options.filePath || getFileName(options);
-  const program = createProgram(code, fileName, extra);
-  const ast = program && program.getSourceFile(fileName);
-  return ast && { ast, program };
-}
-
-/**
- * @param code The code of the file being linted
- * @returns Returns a new source file and program corresponding to the linted code
- */
-function createNewProgram(code: string) {
-  const FILENAME = getFileName(extra);
-
-  const compilerHost: ts.CompilerHost = {
-    fileExists() {
-      return true;
-    },
-    getCanonicalFileName() {
-      return FILENAME;
-    },
-    getCurrentDirectory() {
-      return '';
-    },
-    getDirectories() {
-      return [];
-    },
-    getDefaultLibFileName() {
-      return 'lib.d.ts';
-    },
-
-    // TODO: Support Windows CRLF
-    getNewLine() {
-      return '\n';
-    },
-    getSourceFile(filename: string) {
-      return ts.createSourceFile(filename, code, ts.ScriptTarget.Latest, true);
-    },
-    readFile() {
-      return undefined;
-    },
-    useCaseSensitiveFileNames() {
-      return true;
-    },
-    writeFile() {
-      return null;
-    },
-  };
-
-  const program = ts.createProgram(
-    [FILENAME],
-    {
-      noResolve: true,
-      target: ts.ScriptTarget.Latest,
-      jsx: extra.jsx ? ts.JsxEmit.Preserve : undefined,
-    },
-    compilerHost,
-  );
-
-  const ast = program.getSourceFile(FILENAME)!;
-
-  return { ast, program };
-}
-
-/**
- * @param code The code of the file being linted
- * @param options The config object
- * @param shouldProvideParserServices True iff the program should be attempted to be calculated from provided tsconfig files
+ * @param parseSettings Internal settings for parsing the file
+ * @param hasFullTypeInformation True if the program should be attempted to be calculated from provided tsconfig files
  * @returns Returns a source file and program corresponding to the linted code
  */
 function getProgramAndAST(
-  code: string,
-  options: ParserOptions,
-  shouldProvideParserServices: boolean,
-) {
-  return (
-    (shouldProvideParserServices && getASTFromProject(code, options)) ||
-    (shouldProvideParserServices && getASTAndDefaultProject(code, options)) ||
-    createNewProgram(code)
+  parseSettings: ParseSettings,
+  hasFullTypeInformation: boolean,
+): ASTAndProgram {
+  if (parseSettings.projectService) {
+    const fromProjectService = useProgramFromProjectService(
+      parseSettings.projectService,
+      parseSettings,
+      hasFullTypeInformation,
+      defaultProjectMatchedFiles,
+    );
+    if (fromProjectService) {
+      return fromProjectService;
+    }
+  }
+
+  if (parseSettings.programs) {
+    return useProvidedPrograms(parseSettings.programs, parseSettings);
+  }
+
+  // no need to waste time creating a program as the caller didn't want parser services
+  // so we can save time and just create a lonesome source file
+  if (!hasFullTypeInformation) {
+    return createNoProgram(parseSettings);
+  }
+
+  return createProjectProgram(
+    parseSettings,
+    getWatchProgramsForProjects(parseSettings),
   );
 }
 
-function applyParserOptionsToExtra(options: ParserOptions): void {
-  /**
-   * Track range information in the AST
-   */
-  extra.range = typeof options.range === 'boolean' && options.range;
-  extra.loc = typeof options.loc === 'boolean' && options.loc;
-  /**
-   * Track tokens in the AST
-   */
-  if (typeof options.tokens === 'boolean' && options.tokens) {
-    extra.tokens = [];
-  }
-  /**
-   * Track comments in the AST
-   */
-  if (typeof options.comment === 'boolean' && options.comment) {
-    extra.comment = true;
-    extra.comments = [];
-  }
-  /**
-   * Enable JSX - note the applicable file extension is still required
-   */
-  if (typeof options.jsx === 'boolean' && options.jsx) {
-    extra.jsx = true;
-  }
-  /**
-   * The JSX AST changed the node type for string literals
-   * inside a JSX Element from `Literal` to `JSXText`.
-   *
-   * When value is `true`, these nodes will be parsed as type `JSXText`.
-   * When value is `false`, these nodes will be parsed as type `Literal`.
-   */
-  if (typeof options.useJSXTextNode === 'boolean' && options.useJSXTextNode) {
-    extra.useJSXTextNode = true;
-  }
-  /**
-   * Allow the user to cause the parser to error if it encounters an unknown AST Node Type
-   * (used in testing)
-   */
-  if (
-    typeof options.errorOnUnknownASTType === 'boolean' &&
-    options.errorOnUnknownASTType
-  ) {
-    extra.errorOnUnknownASTType = true;
-  }
-  /**
-   * Allow the user to override the function used for logging
-   */
-  if (typeof options.loggerFn === 'function') {
-    extra.log = options.loggerFn;
-  } else if (options.loggerFn === false) {
-    extra.log = Function.prototype;
-  }
-
-  if (typeof options.project === 'string') {
-    extra.projects = [options.project];
-  } else if (
-    Array.isArray(options.project) &&
-    options.project.every(projectPath => typeof projectPath === 'string')
-  ) {
-    extra.projects = options.project;
-  }
-
-  if (typeof options.tsconfigRootDir === 'string') {
-    extra.tsconfigRootDir = options.tsconfigRootDir;
-  }
-
-  if (
-    Array.isArray(options.extraFileExtensions) &&
-    options.extraFileExtensions.every(ext => typeof ext === 'string')
-  ) {
-    extra.extraFileExtensions = options.extraFileExtensions;
-  }
-}
-
-function warnAboutTSVersion(): void {
-  if (!isRunningSupportedTypeScriptVersion && !warnedAboutTSVersion) {
-    const border = '=============';
-    const versionWarning = [
-      border,
-      'WARNING: You are currently running a version of TypeScript which is not officially supported by typescript-estree.',
-      'You may find that it works just fine, or you may not.',
-      `SUPPORTED TYPESCRIPT VERSIONS: ${SUPPORTED_TYPESCRIPT_VERSIONS}`,
-      `YOUR TYPESCRIPT VERSION: ${ACTIVE_TYPESCRIPT_VERSION}`,
-      'Please only submit bug reports when using the officially supported version.',
-      border,
-    ];
-    extra.log(versionWarning.join('\n\n'));
-    warnedAboutTSVersion = true;
-  }
-}
-
-//------------------------------------------------------------------------------
-// Parser
-//------------------------------------------------------------------------------
-
-type AST<T extends ParserOptions> = TSESTree.Program &
-  (T['range'] extends true ? { range: [number, number] } : {}) &
+/* eslint-disable @typescript-eslint/no-empty-object-type */
+export type AST<T extends TSESTreeOptions> = (T['comment'] extends true
+  ? { comments: TSESTree.Comment[] }
+  : {}) &
   (T['tokens'] extends true ? { tokens: TSESTree.Token[] } : {}) &
-  (T['comment'] extends true ? { comments: TSESTree.Comment[] } : {});
+  TSESTree.Program;
+/* eslint-enable @typescript-eslint/no-empty-object-type */
 
-export interface ParseAndGenerateServicesResult<T extends ParserOptions> {
+export interface ParseAndGenerateServicesResult<T extends TSESTreeOptions> {
   ast: AST<T>;
   services: ParserServices;
 }
+interface ParseWithNodeMapsResult<
+  T extends TSESTreeOptions,
+> extends ParserServicesNodeMaps {
+  ast: AST<T>;
+}
 
-//------------------------------------------------------------------------------
-// Public
-//------------------------------------------------------------------------------
-
-export const version: string = require('../package.json').version;
-
-export function parse<T extends ParserOptions = ParserOptions>(
+export function parse<T extends TSESTreeOptions = TSESTreeOptions>(
   code: string,
   options?: T,
 ): AST<T> {
+  const { ast } = parseWithNodeMapsInternal(code, options, false);
+  return ast;
+}
+
+function parseWithNodeMapsInternal<T extends TSESTreeOptions = TSESTreeOptions>(
+  code: string | ts.SourceFile,
+  options: T | undefined,
+  shouldPreserveNodeMaps: boolean,
+): ParseWithNodeMapsResult<T> {
   /**
    * Reset the parse configuration
    */
-  resetExtra();
+  const parseSettings = createParseSettings(code, options);
+
   /**
    * Ensure users do not attempt to use parse() when they need parseAndGenerateServices()
    */
-  if (options && options.errorOnTypeScriptSyntacticAndSemanticIssues) {
+  if (options?.errorOnTypeScriptSyntacticAndSemanticIssues) {
     throw new Error(
       `"errorOnTypeScriptSyntacticAndSemanticIssues" is only supported for parseAndGenerateServices()`,
     );
   }
+
   /**
-   * Ensure the source code is a string, and store a reference to it
+   * Create a ts.SourceFile directly, no ts.Program is needed for a simple parse
    */
-  if (typeof code !== 'string' && !((code as any) instanceof String)) {
-    code = String(code);
-  }
-  extra.code = code;
-  /**
-   * Apply the given parser options
-   */
-  if (typeof options !== 'undefined') {
-    applyParserOptionsToExtra(options);
-  }
-  /**
-   * Warn if the user is using an unsupported version of TypeScript
-   */
-  warnAboutTSVersion();
-  /**
-   * Create a ts.SourceFile directly, no ts.Program is needed for a simple
-   * parse
-   */
-  const ast = ts.createSourceFile(
-    getFileName(extra),
-    code,
-    ts.ScriptTarget.Latest,
-    /* setParentNodes */ true,
-  );
+  const ast = createSourceFile(parseSettings);
+
   /**
    * Convert the TypeScript AST to an ESTree-compatible one
    */
-  const { estree } = convert(ast, extra, false);
-  return estree as AST<T>;
+  const { astMaps, estree } = astConverter(
+    ast,
+    parseSettings,
+    shouldPreserveNodeMaps,
+  );
+
+  return {
+    ast: estree as AST<T>,
+    esTreeNodeToTSNodeMap: astMaps.esTreeNodeToTSNodeMap,
+    tsNodeToESTreeNodeMap: astMaps.tsNodeToESTreeNodeMap,
+  };
+}
+
+let parseAndGenerateServicesCalls: Record<string, number> = {};
+// Privately exported utility intended for use in typescript-eslint unit tests only
+export function clearParseAndGenerateServicesCalls(): void {
+  parseAndGenerateServicesCalls = {};
 }
 
 export function parseAndGenerateServices<
-  T extends ParserOptions = ParserOptions
->(code: string, options: T): ParseAndGenerateServicesResult<T> {
+  T extends TSESTreeOptions = TSESTreeOptions,
+>(
+  code: string | ts.SourceFile,
+  tsestreeOptions: T,
+): ParseAndGenerateServicesResult<T> {
   /**
    * Reset the parse configuration
    */
-  resetExtra();
+  const parseSettings = createParseSettings(code, tsestreeOptions);
+
   /**
-   * Ensure the source code is a string, and store a reference to it
+   * If this is a single run in which the user has not provided any existing programs but there
+   * are programs which need to be created from the provided "project" option,
+   * create an Iterable which will lazily create the programs as needed by the iteration logic
    */
-  if (typeof code !== 'string' && !((code as any) instanceof String)) {
-    code = String(code);
+  if (
+    parseSettings.singleRun &&
+    !parseSettings.programs &&
+    parseSettings.projects.size > 0
+  ) {
+    parseSettings.programs = {
+      *[Symbol.iterator](): Iterator<ts.Program> {
+        for (const configFile of parseSettings.projects) {
+          const existingProgram = existingPrograms.get(configFile[0]);
+          if (existingProgram) {
+            yield existingProgram;
+          } else {
+            log(
+              'Detected single-run/CLI usage, creating Program once ahead of time for project: %s',
+              configFile,
+            );
+            const newProgram = createProgramFromConfigFile(configFile[1]);
+            existingPrograms.set(configFile[0], newProgram);
+            yield newProgram;
+          }
+        }
+      },
+    };
   }
-  extra.code = code;
-  /**
-   * Apply the given parser options
-   */
-  if (typeof options !== 'undefined') {
-    applyParserOptionsToExtra(options);
-    if (
-      typeof options.errorOnTypeScriptSyntacticAndSemanticIssues ===
-        'boolean' &&
-      options.errorOnTypeScriptSyntacticAndSemanticIssues
-    ) {
-      extra.errorOnTypeScriptSyntacticAndSemanticIssues = true;
-    }
+
+  const hasFullTypeInformation =
+    parseSettings.programs != null ||
+    parseSettings.projects.size > 0 ||
+    !!parseSettings.projectService;
+
+  if (
+    typeof tsestreeOptions.errorOnTypeScriptSyntacticAndSemanticIssues ===
+      'boolean' &&
+    tsestreeOptions.errorOnTypeScriptSyntacticAndSemanticIssues
+  ) {
+    parseSettings.errorOnTypeScriptSyntacticAndSemanticIssues = true;
   }
+
+  if (
+    parseSettings.errorOnTypeScriptSyntacticAndSemanticIssues &&
+    !hasFullTypeInformation
+  ) {
+    throw new Error(
+      'Cannot calculate TypeScript semantic issues without a valid project.',
+    );
+  }
+
   /**
-   * Warn if the user is using an unsupported version of TypeScript
+   * If we are in singleRun mode but the parseAndGenerateServices() function has been called more than once for the current file,
+   * it must mean that we are in the middle of an ESLint automated fix cycle (in which parsing can be performed up to an additional
+   * 10 times in order to apply all possible fixes for the file).
+   *
+   * In this scenario we cannot rely upon the singleRun AOT compiled programs because the SourceFiles will not contain the source
+   * with the latest fixes applied. Therefore we fallback to creating the quickest possible isolated program from the updated source.
+   *
+   * Note: This fallback is only needed for the legacy `project` option which uses AOT compiled programs.
+   * When `projectService` is used, the TypeScript language service always provides up-to-date programs,
+   * so no fallback is necessary. Additionally, external parsers like vue-eslint-parser may call
+   * parseAndGenerateServices() multiple times for the same file in a single lint pass, which would
+   * incorrectly trigger this fallback.
    */
-  warnAboutTSVersion();
-  /**
-   * Generate a full ts.Program in order to be able to provide parser
-   * services, such as type-checking
-   */
-  const shouldProvideParserServices =
-    extra.projects && extra.projects.length > 0;
-  const { ast, program } = getProgramAndAST(
-    code,
-    options,
-    shouldProvideParserServices,
-  );
+  if (parseSettings.singleRun && tsestreeOptions.filePath) {
+    parseAndGenerateServicesCalls[tsestreeOptions.filePath] =
+      (parseAndGenerateServicesCalls[tsestreeOptions.filePath] || 0) + 1;
+  }
+
+  const { ast, program } =
+    parseSettings.singleRun &&
+    tsestreeOptions.filePath &&
+    parseAndGenerateServicesCalls[tsestreeOptions.filePath] > 1 &&
+    !parseSettings.projectService
+      ? createIsolatedProgram(parseSettings)
+      : getProgramAndAST(parseSettings, hasFullTypeInformation);
+
   /**
    * Convert the TypeScript AST to an ESTree-compatible one, and optionally preserve
    * mappings between converted and original AST nodes
    */
-  const { estree, astMaps } = convert(ast, extra, shouldProvideParserServices);
+  const shouldPreserveNodeMaps =
+    typeof parseSettings.preserveNodeMaps === 'boolean'
+      ? parseSettings.preserveNodeMaps
+      : true;
+
+  const { astMaps, estree } = astConverter(
+    ast,
+    parseSettings,
+    shouldPreserveNodeMaps,
+  );
+
   /**
    * Even if TypeScript parsed the source code ok, and we had no problems converting the AST,
    * there may be other syntactic or semantic issues in the code that we can optionally report on.
    */
-  if (program && extra.errorOnTypeScriptSyntacticAndSemanticIssues) {
+  if (program && parseSettings.errorOnTypeScriptSyntacticAndSemanticIssues) {
     const error = getFirstSemanticOrSyntacticError(program, ast);
     if (error) {
       throw convertError(error);
     }
   }
+
   /**
    * Return the converted AST and additional parser services
    */
   return {
     ast: estree as AST<T>,
-    services: {
-      program: shouldProvideParserServices ? program : undefined,
-      esTreeNodeToTSNodeMap:
-        shouldProvideParserServices && astMaps
-          ? astMaps.esTreeNodeToTSNodeMap
-          : undefined,
-      tsNodeToESTreeNodeMap:
-        shouldProvideParserServices && astMaps
-          ? astMaps.tsNodeToESTreeNodeMap
-          : undefined,
-    },
+    services: createParserServices(astMaps, program),
   };
 }
-
-export { AST_NODE_TYPES, AST_TOKEN_TYPES, TSESTree } from './ts-estree';
-export { ParserOptions, ParserServices };

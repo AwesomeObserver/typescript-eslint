@@ -1,8 +1,13 @@
-import { AST_NODE_TYPES, TSESTree } from '@typescript-eslint/typescript-estree';
-import { Scope } from 'ts-eslint';
-import * as util from '../util';
+import type { TSESTree } from '@typescript-eslint/utils';
 
-const SENTINEL_TYPE = /^(?:(?:Function|Class)(?:Declaration|Expression)|ArrowFunctionExpression|CatchClause|ImportDeclaration|ExportNamedDeclaration)$/;
+import { DefinitionType } from '@typescript-eslint/scope-manager';
+import { AST_NODE_TYPES, TSESLint } from '@typescript-eslint/utils';
+
+import { createRule } from '../util';
+import { referenceContainsTypeQuery } from '../util/referenceContainsTypeQuery';
+
+const SENTINEL_TYPE =
+  /^(?:(?:Function|Class)(?:Declaration|Expression)|ArrowFunctionExpression|CatchClause|ImportDeclaration|ExportNamedDeclaration)$/;
 
 /**
  * Parses a given value as options.
@@ -10,75 +15,107 @@ const SENTINEL_TYPE = /^(?:(?:Function|Class)(?:Declaration|Expression)|ArrowFun
 function parseOptions(options: string | Config | null): Required<Config> {
   let functions = true;
   let classes = true;
+  let enums = true;
   let variables = true;
   let typedefs = true;
+  let ignoreTypeReferences = true;
+  let allowNamedExports = false;
 
   if (typeof options === 'string') {
     functions = options !== 'nofunc';
-  } else if (typeof options === 'object' && options !== null) {
+  } else if (typeof options === 'object' && options != null) {
     functions = options.functions !== false;
     classes = options.classes !== false;
+    enums = options.enums !== false;
     variables = options.variables !== false;
     typedefs = options.typedefs !== false;
+    ignoreTypeReferences = options.ignoreTypeReferences !== false;
+    allowNamedExports = options.allowNamedExports !== false;
   }
 
-  return { functions, classes, variables, typedefs };
-}
-
-/**
- * Checks whether or not a given scope is a top level scope.
- */
-function isTopLevelScope(scope: Scope.Scope): boolean {
-  return scope.type === 'module' || scope.type === 'global';
+  return {
+    allowNamedExports,
+    classes,
+    enums,
+    functions,
+    ignoreTypeReferences,
+    typedefs,
+    variables,
+  };
 }
 
 /**
  * Checks whether or not a given variable is a function declaration.
  */
-function isFunction(variable: Scope.Variable): boolean {
-  return variable.defs[0].type === 'FunctionName';
+function isFunction(variable: TSESLint.Scope.Variable): boolean {
+  return variable.defs[0].type === DefinitionType.FunctionName;
+}
+
+/**
+ * Checks whether or not a given variable is a type declaration.
+ */
+function isTypedef(variable: TSESLint.Scope.Variable): boolean {
+  return variable.defs[0].type === DefinitionType.Type;
+}
+
+/**
+ * Checks whether or not a given variable is a enum declaration.
+ */
+function isOuterEnum(
+  variable: TSESLint.Scope.Variable,
+  reference: TSESLint.Scope.Reference,
+): boolean {
+  return (
+    variable.defs[0].type === DefinitionType.TSEnumName &&
+    variable.scope.variableScope !== reference.from.variableScope
+  );
 }
 
 /**
  * Checks whether or not a given variable is a class declaration in an upper function scope.
  */
 function isOuterClass(
-  variable: Scope.Variable,
-  reference: Scope.Reference,
+  variable: TSESLint.Scope.Variable,
+  reference: TSESLint.Scope.Reference,
 ): boolean {
-  if (variable.defs[0].type !== 'ClassName') {
-    return false;
-  }
-
-  if (variable.scope.variableScope === reference.from.variableScope) {
-    // allow the same scope only if it's the top level global/module scope
-    if (!isTopLevelScope(variable.scope.variableScope)) {
-      return false;
-    }
-  }
-
-  return true;
+  return (
+    variable.defs[0].type === DefinitionType.ClassName &&
+    variable.scope.variableScope !== reference.from.variableScope
+  );
 }
 
 /**
  * Checks whether or not a given variable is a variable declaration in an upper function scope.
  */
 function isOuterVariable(
-  variable: Scope.Variable,
-  reference: Scope.Reference,
+  variable: TSESLint.Scope.Variable,
+  reference: TSESLint.Scope.Reference,
 ): boolean {
-  if (variable.defs[0].type !== 'Variable') {
-    return false;
-  }
+  return (
+    variable.defs[0].type === DefinitionType.Variable &&
+    variable.scope.variableScope !== reference.from.variableScope
+  );
+}
 
-  if (variable.scope.variableScope === reference.from.variableScope) {
-    // allow the same scope only if it's the top level global/module scope
-    if (!isTopLevelScope(variable.scope.variableScope)) {
-      return false;
-    }
-  }
+/**
+ * Checks whether or not a given reference is a export reference.
+ */
+function isNamedExports(reference: TSESLint.Scope.Reference): boolean {
+  const { identifier } = reference;
+  return (
+    identifier.parent.type === AST_NODE_TYPES.ExportSpecifier &&
+    identifier.parent.local === identifier
+  );
+}
 
-  return true;
+/**
+ * Checks whether or not a given reference is a type reference.
+ */
+function isTypeReference(reference: TSESLint.Scope.Reference): boolean {
+  return (
+    reference.isTypeReference ||
+    referenceContainsTypeQuery(reference.identifier)
+  );
 }
 
 /**
@@ -92,6 +129,33 @@ function isInRange(
 }
 
 /**
+ * Decorators are transpiled such that the decorator is placed after the class declaration
+ * So it is considered safe
+ */
+function isClassRefInClassDecorator(
+  variable: TSESLint.Scope.Variable,
+  reference: TSESLint.Scope.Reference,
+): boolean {
+  if (
+    variable.defs[0].type !== DefinitionType.ClassName ||
+    variable.defs[0].node.decorators.length === 0
+  ) {
+    return false;
+  }
+
+  for (const deco of variable.defs[0].node.decorators) {
+    if (
+      reference.identifier.range[0] >= deco.range[0] &&
+      reference.identifier.range[1] <= deco.range[1]
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Checks whether or not a given reference is inside of the initializers of a given variable.
  *
  * @returns `true` in the following cases:
@@ -102,14 +166,14 @@ function isInRange(
  * - for (var a of a) {}
  */
 function isInInitializer(
-  variable: Scope.Variable,
-  reference: Scope.Reference,
+  variable: TSESLint.Scope.Variable,
+  reference: TSESLint.Scope.Reference,
 ): boolean {
   if (variable.scope !== reference.from) {
     return false;
   }
 
-  let node = variable.identifiers[0].parent;
+  let node: TSESTree.Node | undefined = variable.identifiers[0].parent;
   const location = reference.identifier.range[1];
 
   while (node) {
@@ -118,8 +182,6 @@ function isInInitializer(
         return true;
       }
       if (
-        node.parent &&
-        node.parent.parent &&
         (node.parent.parent.type === AST_NODE_TYPES.ForInStatement ||
           node.parent.parent.type === AST_NODE_TYPES.ForOfStatement) &&
         isInRange(node.parent.parent.right, location)
@@ -141,23 +203,25 @@ function isInInitializer(
   return false;
 }
 
-interface Config {
-  functions?: boolean;
+export interface Config {
+  allowNamedExports?: boolean;
   classes?: boolean;
-  variables?: boolean;
+  enums?: boolean;
+  functions?: boolean;
+  ignoreTypeReferences?: boolean;
   typedefs?: boolean;
+  variables?: boolean;
 }
-type Options = ['nofunc' | Config];
-type MessageIds = 'noUseBeforeDefine';
+export type Options = ['nofunc' | Config];
+export type MessageIds = 'noUseBeforeDefine';
 
-export default util.createRule<Options, MessageIds>({
+export default createRule<Options, MessageIds>({
   name: 'no-use-before-define',
   meta: {
     type: 'problem',
     docs: {
       description: 'Disallow the use of variables before they are defined',
-      category: 'Variables',
-      recommended: 'error',
+      extendsBaseRule: true,
     },
     messages: {
       noUseBeforeDefine: "'{{name}}' was used before it was defined.",
@@ -166,28 +230,62 @@ export default util.createRule<Options, MessageIds>({
       {
         oneOf: [
           {
+            type: 'string',
+            description:
+              'Broadly set functions and allowNamedExports to false.',
             enum: ['nofunc'],
           },
           {
             type: 'object',
-            properties: {
-              functions: { type: 'boolean' },
-              classes: { type: 'boolean' },
-              variables: { type: 'boolean' },
-              typedefs: { type: 'boolean' },
-            },
             additionalProperties: false,
+            properties: {
+              allowNamedExports: {
+                type: 'boolean',
+                description: 'Whether to ignore named exports.',
+              },
+              classes: {
+                type: 'boolean',
+                description:
+                  'Whether to ignore references to class declarations.',
+              },
+              enums: {
+                type: 'boolean',
+                description: 'Whether to check references to enums.',
+              },
+              functions: {
+                type: 'boolean',
+                description:
+                  'Whether to ignore references to function declarations.',
+              },
+              ignoreTypeReferences: {
+                type: 'boolean',
+                description:
+                  'Whether to ignore type references, such as in type annotations and assertions.',
+              },
+              typedefs: {
+                type: 'boolean',
+                description: 'Whether to check references to types.',
+              },
+              variables: {
+                type: 'boolean',
+                description: 'Whether to ignore references to variables.',
+              },
+            },
           },
         ],
       },
     ],
   },
+  // eslint-disable-next-line @typescript-eslint/no-deprecated -- For compatibility with ESLint 8, see #12842
   defaultOptions: [
     {
-      functions: true,
+      allowNamedExports: false,
       classes: true,
-      variables: true,
+      enums: true,
+      functions: true,
+      ignoreTypeReferences: true,
       typedefs: true,
+      variables: true,
     },
   ],
   create(context, optionsWithDefault) {
@@ -199,59 +297,99 @@ export default util.createRule<Options, MessageIds>({
      * @param reference The reference to the variable
      */
     function isForbidden(
-      variable: Scope.Variable,
-      reference: Scope.Reference,
+      variable: TSESLint.Scope.Variable,
+      reference: TSESLint.Scope.Reference,
     ): boolean {
+      if (options.ignoreTypeReferences && isTypeReference(reference)) {
+        return false;
+      }
       if (isFunction(variable)) {
-        return !!options.functions;
+        return options.functions;
       }
       if (isOuterClass(variable, reference)) {
-        return !!options.classes;
+        return options.classes;
       }
       if (isOuterVariable(variable, reference)) {
-        return !!options.variables;
+        return options.variables;
       }
+      if (isOuterEnum(variable, reference)) {
+        return options.enums;
+      }
+      if (isTypedef(variable)) {
+        return options.typedefs;
+      }
+
       return true;
+    }
+
+    function isDefinedBeforeUse(
+      variable: TSESLint.Scope.Variable,
+      reference: TSESLint.Scope.Reference,
+    ): boolean {
+      return (
+        variable.identifiers[0].range[1] <= reference.identifier.range[1] &&
+        !(reference.isValueReference && isInInitializer(variable, reference))
+      );
     }
 
     /**
      * Finds and validates all variables in a given scope.
      */
-    function findVariablesInScope(scope: Scope.Scope): void {
+    function findVariablesInScope(scope: TSESLint.Scope.Scope): void {
       scope.references.forEach(reference => {
         const variable = reference.resolved;
 
+        function report(): void {
+          context.report({
+            node: reference.identifier,
+            messageId: 'noUseBeforeDefine',
+            data: {
+              name: reference.identifier.name,
+            },
+          });
+        }
+
         // Skips when the reference is:
-        // - initialization's.
+        // - initializations.
         // - referring to an undefined variable.
         // - referring to a global environment variable (there're no identifiers).
         // - located preceded by the variable (except in initializers).
         // - allowed by options.
+        if (reference.init) {
+          return;
+        }
+
+        if (!options.allowNamedExports && isNamedExports(reference)) {
+          if (!variable || !isDefinedBeforeUse(variable, reference)) {
+            report();
+          }
+          return;
+        }
+
+        if (!variable) {
+          return;
+        }
+
         if (
-          reference.init ||
-          !variable ||
           variable.identifiers.length === 0 ||
-          (variable.identifiers[0].range[1] < reference.identifier.range[1] &&
-            !isInInitializer(variable, reference)) ||
-          !isForbidden(variable, reference)
+          isDefinedBeforeUse(variable, reference) ||
+          !isForbidden(variable, reference) ||
+          isClassRefInClassDecorator(variable, reference) ||
+          reference.from.type === TSESLint.Scope.ScopeType.functionType
         ) {
           return;
         }
 
         // Reports.
-        context.report({
-          node: reference.identifier,
-          messageId: 'noUseBeforeDefine',
-          data: reference.identifier,
-        });
+        report();
       });
 
       scope.childScopes.forEach(findVariablesInScope);
     }
 
     return {
-      Program() {
-        findVariablesInScope(context.getScope());
+      Program(node): void {
+        findVariablesInScope(context.sourceCode.getScope(node));
       },
     };
   },
